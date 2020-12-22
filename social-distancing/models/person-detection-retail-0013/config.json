@@ -1,0 +1,7 @@
+{
+    "NN_config": {
+        "output_format" : "detection",
+        "NN_family" : "mobilenet",
+        "confidence_threshold" : 0.7
+    }
+}
