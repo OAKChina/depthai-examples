@@ -190,18 +190,12 @@ class Main:
         nn_data = run_nn(self.land_in, self.land_nn, {"data": to_planar(frame, (48, 48))})
         out = frame_norm(frame,*to_nn_result(nn_data))
         self.land = np.array(to_nn_result(nn_data),dtype=np.float64).reshape(-1,2)
-        raw_left_eye,raw_right_eye,raw_nose,raw_left_zui,raw_right_zui = out[:2],out[2:4],out[4:6],out[6:8],out[8:10]
-        self.left_eye = self.full_frame_cords(raw_left_eye)
-        self.right_eye = self.full_frame_cords(raw_right_eye)
-        self.nose = self.full_frame_cords(raw_nose)
-        self.left_zui = self.full_frame_cords(raw_left_zui)
-        self.right_zui = self.full_frame_cords(raw_right_zui)
-        if debug:
-            cv2.circle(self.debug_frame,(self.left_eye[0],self.left_eye[1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
-            cv2.circle(self.debug_frame,(self.right_eye[0],self.right_eye[1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
-            cv2.circle(self.debug_frame,(self.nose[0],self.nose[1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
-            cv2.circle(self.debug_frame,(self.left_zui[0],self.left_zui[1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
-            cv2.circle(self.debug_frame,(self.right_zui[0],self.right_zui[1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
+        return out
+    
+    def draw_circle(self,outs,count):
+        for i in range(0,len(outs),2):
+            landmarks = outs[i:i+2]
+            cv2.circle(self.debug_frame,(landmarks[0]+self.face_coords[count][0],landmarks[1]+self.face_coords[count][1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
 
     def run_reid(self,frame,count):
         nn_frame = utils.preprocess(frame,self.land,frame.shape)
@@ -260,11 +254,13 @@ class Main:
             self.debug_frame = self.frame.copy()
 
         face_success = self.run_face()
+        self.circle_list = []
         if face_success:
             for i in range(len(self.face_frame)):
-                self.run_land(self.face_frame[i])
-                self.run_reid(self.face_frame[i],i)
-            
+                out = self.run_land(self.face_frame[i])
+                self.circle_list.append(out)
+                self.draw_circle(self.circle_list[i],i)
+                self.run_reid(self.face_frame[i],i)           
 
         if debug:
             aspect_ratio = self.frame.shape[1] / self.frame.shape[0]

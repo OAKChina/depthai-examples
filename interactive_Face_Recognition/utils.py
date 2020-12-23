@@ -64,11 +64,6 @@ def normalize(array, axis):
 
 
 def resize_input(frame, target_shape):
-    # assert len(frame.shape) == len(target_shape), \
-    #     "Expected a frame with %s dimensions, but got %s" % \
-    #     (len(target_shape), len(frame.shape))
-
-    # assert frame.shape[0] == 1, "Only batch size 1 is supported"
     h, w, c = target_shape
 
     input = frame
