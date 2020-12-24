@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from tools import *
-from tools.depthai_0021 import DepthAI
 
 
 class Vehicle(DepthAI):

@@ -1,6 +1,5 @@
 from pathlib import Path
-
-from tools import *
+from .utils import *
 
 
 class DepthAI:
@@ -58,14 +57,14 @@ class DepthAI:
 
     def start_pipeline(self):
         try:
-            self.device = depthai.Device()
-            print("Starting pipeline...")
-            self.device.startPipeline(self.pipeline)
-        except TypeError:
             self.device = depthai.Device(self.pipeline, usb2Mode=True)
             print("Starting pipeline...")
             self.device.startPipeline()
-        except RuntimeError:
+        except TypeError:
+            self.device = depthai.Device()
+            print("Starting pipeline...")
+            self.device.startPipeline(self.pipeline)
+        except:
             return
 
         self.start_nns()
@@ -75,22 +74,6 @@ class DepthAI:
 
     def start_nns(self):
         pass
-
-    # def full_frame_cords(self, cords):
-    #     original_cords = self.face_coords[0]
-    #     return [
-    #         original_cords[0 if i % 2 == 0 else 1] + val for i, val in enumerate(cords)
-    #     ]
-    #
-    # def full_frame_bbox(self, bbox):
-    #     relative_cords = self.full_frame_cords(bbox)
-    #     height, width = self.frame.shape[:2]
-    #     y_min = max(0, relative_cords[1])
-    #     y_max = min(height, relative_cords[3])
-    #     x_min = max(0, relative_cords[0])
-    #     x_max = min(width, relative_cords[2])
-    #     result_frame = self.frame[y_min:y_max, x_min:x_max]
-    #     return result_frame, relative_cords
 
     def draw_bbox(self, bbox, color):
         cv2.rectangle(
@@ -113,17 +96,18 @@ class DepthAI:
         if debug:
             self.debug_frame = self.frame.copy()
 
-        # try:
-        #     self.parse_fun()
-        # except Exception as e:
-        #     print(f'Error:{e}')
-        self.parse_fun()
+        try:
+            self.parse_fun()
+        except Exception as e:
+            # print(f'Error:{e}')
+            pass
 
         if debug:
             aspect_ratio = self.frame.shape[1] / self.frame.shape[0]
             cv2.imshow(
                 "Camera_view",
-                cv2.resize(self.debug_frame, (int(900), int(900 / aspect_ratio))),
+                self.debug_frame,
+                # cv2.resize(self.debug_frame, (int(900), int(900 / aspect_ratio))),
             )
             if cv2.waitKey(1) == ord("q"):
                 cv2.destroyAllWindows()
