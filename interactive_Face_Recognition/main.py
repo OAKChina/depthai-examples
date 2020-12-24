@@ -7,21 +7,40 @@ import depthai
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.distance import cosine
 import os
-import utils
+from utils import Utils
+import photo
+import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-nd', '--no-debug', action="store_true", help="Prevent debug output")
 parser.add_argument('-cam', '--camera', action="store_true", help="Use DepthAI 4K RGB camera for inference (conflicts with -vid)")
 parser.add_argument('-vid', '--video', type=str, help="Path to video file to be used for inference (conflicts with -cam)")
+parser.add_argument('-pho','--photo',action="store_true", help="Save photos to face library")
+parser.add_argument('-n','--name',type=str,help="请输入姓名")
 args = parser.parse_args()
 
 debug = not args.no_debug
 
 if args.camera and args.video:
     raise ValueError("Incorrect command line parameters! \"-cam\" cannot be used with \"-vid\"!")
-elif args.camera is False and args.video is None:
-    raise ValueError("Missing inference source! Either use \"-cam\" to run on DepthAI camera or \"-vid <path>\" to run on video file")
+elif args.camera is False and args.video is None and args.photo is False:
+    raise ValueError("Missing inference source! Either use \"-cam\" to run on DepthAI camera or \"-vid <path>\" to run on video file or \"-pho\" to run photo function")
 
+def timer(function):
+    """
+    装饰器函数timer
+    :param function:想要计时的函数
+    :return:
+    """
+
+    def wrapper(*args, **kwargs):
+        time_start = time.time()
+        res = function(*args, **kwargs)
+        cost_time = time.time() - time_start
+        print("【 %s 】运行时间：【 %s 】秒" % (function.__name__, cost_time))
+        return res
+
+    return wrapper
 
 def wait_for_results(queue):
     start = datetime.now()
@@ -56,7 +75,7 @@ def to_bbox_result(nn_data):
     except:
         return []
 
-
+@timer
 def run_nn(x_in, x_out, in_dict):
     nn_data = depthai.NNData()
     for key in in_dict:
@@ -101,35 +120,20 @@ class Main:
             cam_xout.setStreamName("cam_out")
             cam.preview.link(cam_xout.input)
         
-        print("Creating Face Detection Neural Network...")
-        face_in = self.pipeline.createXLinkIn()
-        face_in.setStreamName("face_in")
-        face_nn = self.pipeline.createNeuralNetwork()
-        face_nn.setBlobPath(str(Path("models/face-detection-retail-0004.blob").resolve().absolute()))
-        face_nn_xout = self.pipeline.createXLinkOut()
-        face_nn_xout.setStreamName("face_nn")
-        face_in.out.link(face_nn.input)
-        face_nn.out.link(face_nn_xout.input)
+        self.models("models/face-detection-retail-0004.blob","face")
+        self.models("models/landmarks-regression-retail-0009.blob","land")
+        self.models("models/face-reidentification-retail-0095.blob",'reid')
 
-        land_in = self.pipeline.createXLinkIn()
-        land_in.setStreamName("land_in")
-        land_nn = self.pipeline.createNeuralNetwork()
-        land_nn.setBlobPath(str(Path("models/landmarks-regression-retail-0009.blob").resolve().absolute()))
-        land_nn_xout = self.pipeline.createXLinkOut()
-        land_nn_xout.setStreamName("land_nn")
-        land_in.out.link(land_nn.input)
-        land_nn.out.link(land_nn_xout.input) 
-
-        reid_in = self.pipeline.createXLinkIn()
-        reid_in.setStreamName("reid_in")
-        reid_nn = self.pipeline.createNeuralNetwork()
-        reid_nn.setBlobPath(str(Path("models/face-reidentification-retail-0095.blob").resolve().absolute()))
-        reid_nn_xout = self.pipeline.createXLinkOut()
-        reid_nn_xout.setStreamName("reid_nn")
-        reid_in.out.link(reid_nn.input)
-        reid_nn.out.link(reid_nn_xout.input) 
-
-
+    def models(self,model_path,name):
+        print(f"开始创建{model_path}神经网络")
+        model_in = self.pipeline.createXLinkIn()
+        model_in.setStreamName(f"{name}_in")
+        model_nn = self.pipeline.createNeuralNetwork()
+        model_nn.setBlobPath(str(Path(model_path).resolve().absolute()))
+        model_nn_xout = self.pipeline.createXLinkOut()
+        model_nn_xout.setStreamName(f"{name}_nn")
+        model_in.out.link(model_nn.input)
+        model_nn.out.link(model_nn_xout.input)
 
     def start_pipeline(self):
         self.device = depthai.Device()
@@ -186,19 +190,16 @@ class Main:
                 self.draw_bbox(bbox, (10, 245, 10))
         return True
     
-    def run_land(self,frame):
+    def run_land(self,frame,count):
         nn_data = run_nn(self.land_in, self.land_nn, {"data": to_planar(frame, (48, 48))})
         out = frame_norm(frame,*to_nn_result(nn_data))
         self.land = np.array(to_nn_result(nn_data),dtype=np.float64).reshape(-1,2)
-        return out
-    
-    def draw_circle(self,outs,count):
-        for i in range(0,len(outs),2):
-            landmarks = outs[i:i+2]
+        for i in range(0,len(out),2):
+            landmarks = out[i:i+2]
             cv2.circle(self.debug_frame,(landmarks[0]+self.face_coords[count][0],landmarks[1]+self.face_coords[count][1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
 
     def run_reid(self,frame,count):
-        nn_frame = utils.preprocess(frame,self.land,frame.shape)
+        nn_frame = Utils().preprocess(frame,self.land,frame.shape)
         fol = np.array(nn_frame[0])
         nn_data = run_nn(self.reid_in, self.reid_nn, {"data": to_planar(fol, (128, 128))})
         nn_out = to_nn_result(nn_data)
@@ -230,7 +231,7 @@ class Main:
         nn_data = run_nn(self.land_in, self.land_nn, {"data": to_planar(img_frame, (48, 48))})
         land = np.array(to_nn_result(nn_data),dtype=np.float64).reshape(-1,2)
 
-        nn_frame = utils.preprocess(img_frame,land,img_frame.shape)
+        nn_frame = Utils().preprocess(img_frame,land,img_frame.shape)
         fol = np.array(nn_frame[0])
         img_data = run_nn(self.reid_in, self.reid_nn, {"data": to_planar(fol, (128, 128))})
         img_out = to_nn_result(img_data)
@@ -254,12 +255,9 @@ class Main:
             self.debug_frame = self.frame.copy()
 
         face_success = self.run_face()
-        self.circle_list = []
         if face_success:
             for i in range(len(self.face_frame)):
-                out = self.run_land(self.face_frame[i])
-                self.circle_list.append(out)
-                self.draw_circle(self.circle_list[i],i)
+                self.run_land(self.face_frame[i],i)
                 self.run_reid(self.face_frame[i],i)           
 
         if debug:
@@ -280,7 +278,6 @@ class Main:
                 self.parse()
             except StopIteration:
                 break
-
         cap.release()
 
     def run_camera(self):
@@ -301,5 +298,7 @@ class Main:
 if __name__ == '__main__':
     if args.video:
         Main(file=args.video).run()
-    else:
+    elif args.camera:
         Main(camera=args.camera).run()
+    elif args.photo:
+        photo.photo(name=args.name)
