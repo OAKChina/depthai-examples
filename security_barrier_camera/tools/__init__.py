@@ -22,9 +22,26 @@ parser.add_argument(
     type=str,
     help="Path to video file to be used for inference (conflicts with -cam)",
 )
+
+parser.add_argument(
+    "-db",
+    "--databases",
+    action="store_true",
+    help="保存数据库",
+)
+
+parser.add_argument(
+    "-n",
+    "--name",
+    type=str,
+    help="库名",
+)
+
 args = parser.parse_args()
 
 debug = not args.no_debug
+
+is_db = args.databases
 
 if args.camera and args.video:
     raise ValueError(
@@ -134,7 +151,7 @@ def draw_3d_axis(image, head_pose, origin, size=50):
     # Y axis (green)
     x2 = size * (-cos(yaw) * sin(roll)) + origin[0]
     y2 = (
-        size * (-cos(pitch) * cos(roll) - sin(pitch) * sin(yaw) * sin(roll)) + origin[1]
+            size * (-cos(pitch) * cos(roll) - sin(pitch) * sin(yaw) * sin(roll)) + origin[1]
     )
     cv2.line(image, (origin[0], origin[1]), (int(x2), int(y2)), (0, 255, 0), 3)
 
@@ -147,18 +164,50 @@ def draw_3d_axis(image, head_pose, origin, size=50):
 
 
 def correction(frame, coords):
+    frame = frame.copy()
     angle = cv2.minAreaRect(coords)[-1]
     angle = -(angle + 90) if angle < -45 else -angle
 
     print(f"倾斜角度为：{angle}度")
     h, w = frame.shape[:2]
     center = (w // 2, h // 2)
-    M = cv2.getRotationMatrix2D(center, angle, 0.8)
+    M = cv2.getRotationMatrix2D(center, -angle, 0.8)
     corr = cv2.warpAffine(
         frame,
         M,
         (w, h),
         flags=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_REPLICATE,
+        borderMode=cv2.BORDER_CONSTANT,
+        # borderMode=cv2.BORDER_WRAP
     )
     return corr
+
+
+def cosine_distance(a, b):
+    """
+    根据输入数据的不同，分为两种模式处理。
+
+    输入数据为一维向量，计算单张图片或文本之间的相似度 （单张模式）
+
+    输入数据为二维向量（矩阵），计算多张图片或文本之间的相似度 （批量模式）
+
+    :param a: 图片向量
+    :param b: 图片向量
+    :return: 余弦相似度
+    """
+    if a.shape != b.shape:
+        raise RuntimeError("array {} shape not match {}".format(a.shape, b.shape))
+    if a.ndim == 1:
+        # 操作是求向量的范式，默认是 L2 范式，等同于求向量的欧式距离
+        a_norm = np.linalg.norm(a)
+        b_norm = np.linalg.norm(b)
+    elif a.ndim == 2:
+        # 设置参数 axis=1 。对于归一化二维向量时，将数据按行向量处理，相当于单独对每张图片特征进行归一化处理。
+        a_norm = np.linalg.norm(a, axis=1, keepdims=True)
+        b_norm = np.linalg.norm(b, axis=1, keepdims=True)
+    else:
+        raise RuntimeError("array dimensions {} not right".format(a.ndim))
+    similiarity = np.dot(a, b.T) / (a_norm * b_norm)
+    # dist = 1.0 - similiarity  # 余弦距离 = 1- 余弦相似度
+    # return dist
+    return similiarity
