@@ -37,5 +37,6 @@ def photo(name):
             break
         if k == ord('s'):
             cv2.imwrite(f"./images/{name}/{name}_{count}.jpg", frame)
+            print("成功保存一张图片")
             count += 1
     cv2.destroyAllWindows()

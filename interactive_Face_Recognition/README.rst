@@ -75,6 +75,7 @@
 ************************************
 
 .. code-block:: python
+
    python main.py -cam
 
 按'q'退出程序。
