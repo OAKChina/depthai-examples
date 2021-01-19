@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tools import *
+from depthai_utils import *
 
 
 class Vehicle(DepthAI):
@@ -9,25 +9,32 @@ class Vehicle(DepthAI):
 
     def create_nns(self):
 
-        self.create_nn(
+        self.create_first_nn(
             "models/vehicle-license-plate-detection-barrier-0106.blob", "vlpd"
         )
         self.create_nn("models/vehicle-attributes-recognition-barrier-0039.blob", "var")
         self.create_nn("models/license-plate-recognition-barrier-0007.blob", "lpr")
 
     def start_nns(self):
-        self.vlpd_in = self.device.getInputQueue("vlpd_in")
+        if not self.camera:
+            self.vlpd_in = self.device.getInputQueue("vlpd_in")
         self.vlpd_nn = self.device.getOutputQueue("vlpd_nn")
         self.var_in = self.device.getInputQueue("var_in")
         self.var_nn = self.device.getOutputQueue("var_nn")
         self.lpr_in = self.device.getInputQueue("lpr_in")
         self.lpr_nn = self.device.getOutputQueue("lpr_nn")
 
-
     def run_vlpd(self):
-        nn_data = run_nn(
-            self.vlpd_in, self.vlpd_nn, {"data": to_planar(self.frame, (300, 300))}
-        )
+        if not self.camera:
+            nn_data = run_nn(
+                self.vlpd_in, self.vlpd_nn, {"data": to_planar(self.frame, (self.first_size[1], self.first_size[0]))}
+            )
+        else:
+            nn_data = self.vlpd_nn.tryGet()
+
+        if nn_data is None:
+            return False, False
+
         results = to_bbox_result(nn_data)
 
         self.vehicle_coords = [
@@ -45,8 +52,12 @@ class Vehicle(DepthAI):
         flag_vehicle = False if len(self.vehicle_coords) == 0 else True
         flag_card = False if len(self.lpr_coords) == 0 else True
         if flag_vehicle:
+            # print("vehicle_coords",self.vehicle_coords)
+            self.vehicle_coords = scale_bboxes(self.vehicle_coords, scale=False)
             self.vehicle_()
         if flag_card:
+            # print("lpr_coords",self.lpr_coords)
+            self.lpr_coords = scale_bboxes(self.lpr_coords)
             self.lpr_()
             # pass
         return flag_vehicle, flag_card
@@ -54,8 +65,8 @@ class Vehicle(DepthAI):
     def vehicle_(self):
         self.vehicle_frame = [
             self.frame[
-            self.vehicle_coords[i][1]: self.vehicle_coords[i][3],
-            self.vehicle_coords[i][0]: self.vehicle_coords[i][2],
+                self.vehicle_coords[i][1] : self.vehicle_coords[i][3],
+                self.vehicle_coords[i][0] : self.vehicle_coords[i][2],
             ]
             for i in range(len(self.vehicle_coords))
         ]
@@ -65,26 +76,33 @@ class Vehicle(DepthAI):
                 self.draw_bbox(bbox, (10, 245, 10))
 
     def lpr_(self):
+        # self.lpr_frame = [
+        #     self.frame[
+        #     int(
+        #         (self.lpr_coords[i][3] + self.lpr_coords[i][1]) / 2
+        #         - (self.lpr_coords[i][3] - self.lpr_coords[i][1]) / 2 * 1.5
+        #     ): int(
+        #         (self.lpr_coords[i][3] + self.lpr_coords[i][1]) / 2
+        #         + (self.lpr_coords[i][3] - self.lpr_coords[i][1]) / 2 * 1.5
+        #     ),
+        #     int(
+        #         (self.lpr_coords[i][2] + self.lpr_coords[i][0]) / 2
+        #         - (self.lpr_coords[i][2] - self.lpr_coords[i][0]) / 2 * 1.5
+        #     ): int(
+        #         (self.lpr_coords[i][2] + self.lpr_coords[i][0]) / 2
+        #         + (self.lpr_coords[i][2] - self.lpr_coords[i][0]) / 2 * 1.5
+        #     ),
+        #     ]
+        #     for i in range(len(self.lpr_coords))
+        # ]
+
         self.lpr_frame = [
             self.frame[
-            int(
-                (self.lpr_coords[i][3] + self.lpr_coords[i][1]) / 2
-                - (self.lpr_coords[i][3] - self.lpr_coords[i][1]) / 2 * 1.5
-            ): int(
-                (self.lpr_coords[i][3] + self.lpr_coords[i][1]) / 2
-                + (self.lpr_coords[i][3] - self.lpr_coords[i][1]) / 2 * 1.5
-            ),
-            int(
-                (self.lpr_coords[i][2] + self.lpr_coords[i][0]) / 2
-                - (self.lpr_coords[i][2] - self.lpr_coords[i][0]) / 2 * 1.5
-            ): int(
-                (self.lpr_coords[i][2] + self.lpr_coords[i][0]) / 2
-                + (self.lpr_coords[i][2] - self.lpr_coords[i][0]) / 2 * 1.5
-            ),
+                self.lpr_coords[i][1] : self.lpr_coords[i][3],
+                self.lpr_coords[i][0] : self.lpr_coords[i][2],
             ]
             for i in range(len(self.lpr_coords))
         ]
-
         if debug:
             for bbox in self.lpr_coords:
                 self.draw_bbox(bbox, (10, 245, 10))
@@ -99,6 +117,8 @@ class Vehicle(DepthAI):
                 self.var_nn,
                 {"data": to_planar(self.vehicle_frame[i], (72, 72))},
             )
+            if nn_data is None:
+                break
             results = to_tensor_result(nn_data)
             for key in results.keys():
                 results[key] = results[key][: len(results[key]) // 2]
@@ -210,6 +230,9 @@ class Vehicle(DepthAI):
                 {"data": to_planar(self.lpr_frame[i], (94, 24))},
             )
 
+            if nn_data is None:
+                break
+
             lpr_str = ""
             results = to_nn_result(nn_data)
 
@@ -239,7 +262,6 @@ class Vehicle(DepthAI):
             self.run_var()
         if vehicle_success[1]:
             self.run_lpr()
-
 
     def cam_size(self):
         self.first_size = (300, 300)

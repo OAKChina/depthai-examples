@@ -32,6 +32,7 @@
 要安装所有必需的 Python 模块，您可以使用：
 
 .. code:: bash
+    python3 -m pip install -U pip
 
     pip3 install -r requirements.txt
 
