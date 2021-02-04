@@ -15,7 +15,7 @@ class DepthAI:
         self.HD = args.hd
         self.file = file
         self.camera = camera
-        self.cam_size()
+        # self.cam_size()
         self.fps = FPS()
         self.create_pipeline()
         self.start_pipeline()
@@ -30,7 +30,7 @@ class DepthAI:
             # ColorCamera
             print("Creating Color Camera...")
             self.cam = self.pipeline.createColorCamera()
-            self.cam.setPreviewSize(self.first_size[1], self.first_size[0])
+            self.cam.setPreviewSize(self._cam_size[1], self._cam_size[0])
             self.cam.setResolution(
                 depthai.ColorCameraProperties.SensorResolution.THE_1080_P
             )
@@ -104,9 +104,7 @@ class DepthAI:
     def start_nns(self):
         pass
 
-    def put_text(
-        self, text, dot, color=(0, 0, 255), font_scale=None, line_type=None
-    ):
+    def put_text(self, text, dot, color=(0, 0, 255), font_scale=None, line_type=None):
         font_scale = font_scale if font_scale else self.fontScale
         line_type = line_type if line_type else self.lineType
         dot = tuple(dot[:2])
@@ -210,8 +208,15 @@ class DepthAI:
                     except StopIteration:
                         break
 
+    # def cam_size(self):
+    #     self.first_size = (0, 0)
+    @property
     def cam_size(self):
-        self.first_size = (0, 0)
+        return self._cam_size
+
+    @cam_size.setter
+    def cam_size(self, v):
+        self._cam_size = v
 
     def run(self):
         self.fps.start()
