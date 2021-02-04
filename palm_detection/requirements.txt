@@ -3,6 +3,7 @@ opencv-python
 numpy
 scipy
 imutils
+pynput
 
 --extra-index-url https://artifacts.luxonis.com/artifactory/luxonis-python-snapshot-local/
 depthai==0.0.2.1+835d7147b0d6f7aef828eb5af187cfbace708e25
