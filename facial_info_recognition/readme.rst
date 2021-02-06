@@ -1,11 +1,11 @@
-年龄与性别识别
+面部信息识别
 ==============
 
-.. figure:: ./age_gender.png
-   :alt: age_gender
+.. figure:: ./facial_info_recognition.png
+   :alt: facial_info_recognition
 
 
-本演示展示了年龄性别识别。您可以在演示中使用以下一组预先训练的模型：
+本演示展示了面部信息识别。您可以在演示中使用以下一组预先训练的模型：
 
 -  ``face-detection-retail-0004`` 是检测定位人脸的主要网络
 -  ``age-gender-recognition-retail-0013`` 是识别年龄与性别的的主要网络

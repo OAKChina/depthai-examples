@@ -1,4 +1,6 @@
 # coding=utf-8
+from queue import Queue
+
 from depthai_utils import *
 
 
@@ -6,6 +8,8 @@ class Main(DepthAI):
     def __init__(self, file=None, camera=False):
         self.cam_size = (720, 1280)
         super(Main, self).__init__(file, camera)
+        self.age_frame = Queue()
+        self.emo_frame = Queue()
 
     def create_nns(self):
         self.create_nn("models/face-detection-retail-0004.blob", "face")
@@ -36,63 +40,72 @@ class Main(DepthAI):
         self.face_coords = [
             frame_norm((300, 300), *obj[3:7]) for obj in results if obj[2] > 0.8
         ]
-        if len(self.face_coords) == 0:
+
+        self.face_num = len(self.face_coords)
+        if self.face_num == 0:
             return False
 
         self.face_coords = restore_point(self.face_coords, scale, top, left).astype(int)
 
         self.face_coords = scale_bboxes(self.face_coords, scale=True, scale_size=1.5)
 
-        self.face_frame = self.frame[
-            self.face_coords[0][1] : self.face_coords[0][3],
-            self.face_coords[0][0] : self.face_coords[0][2],
-        ]
+        for i in range(self.face_num):
+            face = self.frame[
+                self.face_coords[i][1] : self.face_coords[i][3],
+                self.face_coords[i][0] : self.face_coords[i][2],
+            ]
+            self.age_frame.put(face)
+            self.emo_frame.put(face)
         if debug:
             for bbox in self.face_coords:
                 self.draw_bbox(bbox, (10, 245, 10))
         return True
 
     def run_ag(self):
-        nn_data = run_nn(
-            self.ag_in,
-            self.ag_nn,
-            {"data": to_planar(self.face_frame, (62, 62))[0]},
-        )
-        if nn_data is None:
-            return
-        results = to_tensor_result(nn_data)
-        age = results["age_conv3"][0] * 100
-        gender = "Male" if results["prob"].argmax() else "Female"
+        for i in range(self.face_num):
+            age_frame = self.age_frame.get()
+            nn_data = run_nn(
+                self.ag_in,
+                self.ag_nn,
+                {"data": to_planar(age_frame, (62, 62))[0]},
+            )
+            if nn_data is None:
+                return
+            results = to_tensor_result(nn_data)
+            age = results["age_conv3"][0] * 100
+            gender = "Male" if results["prob"].argmax() else "Female"
 
-        # print(results)
+            # print(results)
 
-        self.put_text(
-            f"Age: {age:0.0f}",
-            (self.face_coords[0][0], self.face_coords[0][1] + 20),
-            (244, 0, 255),
-        )
-        self.put_text(
-            f"G: {gender}",
-            (self.face_coords[0][0], self.face_coords[0][1] + 50),
-            (0, 244, 255),
-        )
+            self.put_text(
+                f"Age: {age:0.0f}",
+                (self.face_coords[i][0], self.face_coords[i][1] + 20),
+                (244, 0, 255),
+            )
+            self.put_text(
+                f"G: {gender}",
+                (self.face_coords[i][0], self.face_coords[i][1] + 50),
+                (0, 244, 255),
+            )
 
     def run_emo(self):
-        emo = ["neutral", "happy", "sad", "surprise", "anger"]
-        nn_data = run_nn(
-            self.emo_in,
-            self.emo_nn,
-            {"prob": to_planar(self.face_frame, (64, 64))[0]},
-        )
-        if nn_data is None:
-            return
-        out = to_nn_result(nn_data)
-        # print(out)
-        emo_r = emo[out.argmax()]
-        if out.max() > 0.5:
+        for i in range(self.face_num):
+            emo_frame = self.emo_frame.get()
+            emo = ["neutral", "happy", "sad", "surprise", "anger"]
+            nn_data = run_nn(
+                self.emo_in,
+                self.emo_nn,
+                {"prob": to_planar(emo_frame, (64, 64))[0]},
+            )
+            if nn_data is None:
+                return
+            out = to_nn_result(nn_data)
+            # print(out)
+            emo_r = emo[out.argmax()]
+
             self.put_text(
                 emo_r,
-                (self.face_coords[0][0], self.face_coords[0][1] + 80),
+                (self.face_coords[i][0], self.face_coords[i][1] + 80),
                 (0, 0, 255),
             )
 
