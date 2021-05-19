@@ -2,6 +2,14 @@
 
 该示例演示了Gen2 Pipeline Builder运行的mobilenet-ssd神经网络模型，检测人物目标并控制云台将目标始终置于图像中央。
 
+## 需要用到的硬件设备
+
+- depthai
+- 树莓派
+- 云台
+
+![equipment](media/traker.jpg)
+
 ## 演示
 
 ![traker](media/traker.gif)
