@@ -8,7 +8,7 @@
 - 树莓派
 - 云台
 
-![equipment](media/traker.jpg)
+<img src="media/traker.jpg" alt="图片替换文本" width="480" height="640" align="bottom" />
 
 ## 演示
 
