@@ -213,6 +213,7 @@ with dai.Device(create_pipeline()) as device:
     yolox_det_nn = device.getOutputQueue("yolox_det_nn")
 
     frame = None
+    cap_fps = 0
 
     if args.video:
         cap = cv2.VideoCapture(args.video.resolve().absolute().as_posix())
@@ -222,6 +223,8 @@ with dai.Device(create_pipeline()) as device:
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         frame_shape = [frame_height, frame_width]
         print("CAP_PROP_FRAME_SHAPE: %s" % frame_shape)
+        cap_fps = int(cap.get(cv2.CAP_PROP_FPS))
+        print("CAP_PROP_FPS: %d" % cap_fps)
 
     if args.output_dir:
         output_shape = tuple(args.output_shape) if args.output_shape else frame_shape
@@ -232,15 +235,17 @@ with dai.Device(create_pipeline()) as device:
             / "saved_%s.mp4"
             % time.strftime("%Y%m%d_%H%M%S", time.localtime())
         )
-        cap_fps = int(cap.get(cv2.CAP_PROP_FPS))
-        print("CAP_PROP_FPS: %d" % cap_fps)
         if cap_fps > 1:
             videoWriter = cv2.VideoWriter(
                 output_path.as_posix(), fourcc, cap_fps, output_shape[::-1], 1
             )
         else:
             videoWriter = cv2.VideoWriter(
-                output_path.as_posix(), fourcc, args.fps, output_shape[::-1], 1
+                output_path.as_posix(),
+                fourcc,
+                args.fps if args.fps else 30,
+                output_shape[::-1],
+                1,
             )
 
     def should_run():
