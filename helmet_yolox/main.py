@@ -9,9 +9,11 @@ import numpy as np
 from imutils.video import FPS
 from rich import print
 
-from label_classes import COCO_CLASSES
 from demo_utils import multiclass_nms, demo_postprocess
 from visualize import vis
+
+VOC_CLASSES = ("helmet", "head")
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -46,7 +48,7 @@ parser.add_argument(
     nargs="+",
     type=int,
     help="The shape (h, w) of the input stream used only for the camera stream. "
-    "\r\ndefault : 720, 1280",
+    "\r\nDefault value: 720, 1280",
 )
 
 parser.add_argument(
@@ -161,6 +163,7 @@ def create_pipeline():
         cam = pipeline.createColorCamera()
         cam.setPreviewSize(*args.input_shape[::-1])
         cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+        cam.setFps(30)
         cam.setInterleaved(False)
         cam.setBoardSocket(dai.CameraBoardSocket.RGB)
         cam_xout = pipeline.createXLinkOut()
@@ -172,14 +175,14 @@ def create_pipeline():
     yoloDet = pipeline.createNeuralNetwork()
     if args.camera:
         yoloDet.setBlobPath(
-            Path("models/yolox_nano_320x320_openvino_2021.4_6shave.blob")
+            Path("models/helmet_detection_yolox1_openvino_2021.4_6shave.blob")
             .resolve()
             .absolute()
             .as_posix()
         )
     else:
         yoloDet.setBlobPath(
-            Path("models/yolox_nano_320x320_openvino_2021.4_8shave.blob")
+            Path("models/helmet_detection_yolox1_openvino_2021.4_8shave.blob")
             .resolve()
             .absolute()
             .as_posix()
@@ -216,6 +219,7 @@ with dai.Device(create_pipeline()) as device:
 
     if args.video:
         cap = cv2.VideoCapture(args.video.resolve().absolute().as_posix())
+
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         print("CAP_PROP_FRAME_COUNT: %d" % frame_count)
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -240,7 +244,11 @@ with dai.Device(create_pipeline()) as device:
             )
         else:
             videoWriter = cv2.VideoWriter(
-                output_path.as_posix(), fourcc, args.fps, output_shape[::-1], 1
+                output_path.as_posix(),
+                fourcc,
+                args.fps if args.fps else 30,
+                output_shape[::-1],
+                1,
             )
 
     def should_run():
@@ -300,8 +308,8 @@ with dai.Device(create_pipeline()) as device:
                     final_boxes,
                     final_scores,
                     final_cls_inds,
-                    conf=0.5,
-                    class_names=COCO_CLASSES,
+                    conf=0.6,
+                    class_names=VOC_CLASSES,
                 )
         if args.output_dir:
             if args.output_shape:
@@ -315,9 +323,9 @@ with dai.Device(create_pipeline()) as device:
 
         r = (args.input_shape / np.array(frame.shape[:2])).max()
         if debug:
-            cv2.imshow("debug", frame_debug)
+            cv2.imshow("debug", cv2.resize(frame_debug, (0, 0), fx=r, fy=r))
         else:
-            cv2.imshow("preview", frame)
+            cv2.imshow("preview", cv2.resize(frame, (0, 0), fx=r, fy=r))
         key = cv2.waitKey(1)
         if key in [ord("q"), 27]:
             break

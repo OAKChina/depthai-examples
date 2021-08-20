@@ -1,11 +1,11 @@
-`YOLOX` 目标检测演示
+安全帽检测演示
 ====================
 
-![detection](demo.png)
+![detection](saved_20210820_131341.webp)
 
 本演示展示了目标检测网络。您可以在演示中使用以下一组预先训练的模型：
 
--   [`yolox_nano`](models/yolox_nano_320x320_openvino_2021.4_6shave.blob) 是目标检测网络
+-   [`helmet_detection`](models/helmet_detection_yolox1_openvino_2021.4_6shave.blob) 是目标检测网络
 
 安装依赖项
 ----------
@@ -46,8 +46,6 @@ optional arguments:
                         The default is the shape of the input stream
   -f FPS, --fps FPS     Set the FPS (only for the output video of the camera stream). 
                         Default value: 30
-
-
 ```
 
 运行该应用程序的有效命令行示例：
