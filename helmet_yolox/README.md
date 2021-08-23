@@ -1,7 +1,7 @@
 安全帽检测演示
 ====================
 
-![detection](saved_20210820_131341.webp)
+[![detection](saved_20210820_131341.webp)](https://www.bilibili.com/video/BV1LM4y1L7PZ?share_source=copy_web)
 
 本演示展示了目标检测网络。您可以在演示中使用以下一组预先训练的模型：
 

@@ -1,6 +1,7 @@
 # DepthAI 上的跌倒检测
 
-![Demo](img/demo.gif)
+[![](https://i2.hdslb.com/bfs/archive/e9d854ffa43e23ac1528da672114868e49867bba.jpg)](https://www.bilibili.com/video/BV1eA411w7Az?share_source=copy_web)
+
 
 在 [DepthAI](https://docs.luxonis.com/en/latest/) 硬件（OAK-1、OAK-D...）上运行 Google MoveNet Single Pose 模型。
 
