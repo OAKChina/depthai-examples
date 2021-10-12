@@ -1,19 +1,41 @@
-from pathlib import Path
+from collections import deque
+
+import blobconverter
 
 from depthai_utils import *
+
+parentDir = Path(__file__).parent
+shaves = 6 if args.camera else 8
+blobconverter.set_defaults(output_dir=parentDir / Path("models"))
 
 
 class Vehicle(DepthAI):
     def __init__(self, file=None, camera=False):
+        self.lpr_coords = deque()
+        self.vehicle_coords = deque()
+        self.cam_size = (300, 300)
+
         super().__init__(file, camera)
 
     def create_nns(self):
 
-        self.create_first_nn(
-            "models/vehicle-license-plate-detection-barrier-0106.blob", "vlpd"
+        self.create_mobilenet_nn(
+            blobconverter.from_zoo(
+                "vehicle-license-plate-detection-barrier-0106", shaves=shaves
+            ),
+            "vlpd",
+            first=True if self.camera else False,
         )
-        self.create_nn("models/vehicle-attributes-recognition-barrier-0039.blob", "var")
-        self.create_nn("models/license-plate-recognition-barrier-0007.blob", "lpr")
+        self.create_nn(
+            blobconverter.from_zoo(
+                "vehicle-attributes-recognition-barrier-0039", shaves=shaves
+            ),
+            "var",
+        )
+        self.create_nn(
+            blobconverter.from_zoo("license-plate-recognition-barrier-0007", shaves=shaves),
+            "lpr",
+        )
 
     def start_nns(self):
         if not self.camera:
@@ -27,7 +49,7 @@ class Vehicle(DepthAI):
     def run_vlpd(self):
         if not self.camera:
             nn_data = run_nn(
-                self.vlpd_in, self.vlpd_nn, {"data": to_planar(self.frame, (self.first_size[1], self.first_size[0]))}
+                self.vlpd_in, self.vlpd_nn, {"data": to_planar(self.frame, (300, 300))}
             )
         else:
             nn_data = self.vlpd_nn.tryGet()
@@ -35,29 +57,46 @@ class Vehicle(DepthAI):
         if nn_data is None:
             return False, False
 
-        results = to_bbox_result(nn_data)
+        bboxes = nn_data.detections
+        self.vehicle_coords.clear()
+        self.lpr_coords.clear()
+        for bbox in bboxes:
+            if bbox.label == 1:
+                self.vehicle_coords.append(
+                    frame_norm(
+                        (300, 300), *[bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
+                    )
+                )
+            elif bbox.label == 2:
+                self.lpr_coords.append(
+                    frame_norm(
+                        (300, 300), *[bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
+                    )
+                )
 
-        self.vehicle_coords = [
-            frame_norm(self.frame, *obj[3:7])
-            for obj in results
-            if obj[2] > 0.6 and obj[1] == 1
-        ]
-
-        self.lpr_coords = [
-            frame_norm(self.frame, *obj[3:7])
-            for obj in results
-            if obj[2] > 0.6 and obj[1] == 2
-        ]
+        # results = to_bbox_result(nn_data)
+        #
+        # self.vehicle_coords = [
+        #     frame_norm(self.frame, *obj[3:7])
+        #     for obj in results
+        #     if obj[2] > 0.6 and obj[1] == 1
+        # ]
+        #
+        # self.lpr_coords = [
+        #     frame_norm(self.frame, *obj[3:7])
+        #     for obj in results
+        #     if obj[2] > 0.6 and obj[1] == 2
+        # ]
 
         flag_vehicle = False if len(self.vehicle_coords) == 0 else True
         flag_card = False if len(self.lpr_coords) == 0 else True
         if flag_vehicle:
             # print("vehicle_coords",self.vehicle_coords)
-            self.vehicle_coords = scale_bboxes(self.vehicle_coords, scale=False)
+            # self.vehicle_coords = scale_bboxes(self.vehicle_coords, scale=False)
             self.vehicle_()
         if flag_card:
             # print("lpr_coords",self.lpr_coords)
-            self.lpr_coords = scale_bboxes(self.lpr_coords)
+            # self.lpr_coords = scale_bboxes(self.lpr_coords)
             self.lpr_()
             # pass
         return flag_vehicle, flag_card
@@ -140,7 +179,7 @@ class Vehicle(DepthAI):
                 type_,
                 (
                     self.vehicle_coords[i][0],
-                    self.vehicle_coords[i][1] + self.lineType * 15,
+                    self.vehicle_coords[i][1] + 15,
                 ),
                 cv2.FONT_HERSHEY_COMPLEX,
                 self.fontScale,
@@ -262,9 +301,6 @@ class Vehicle(DepthAI):
             self.run_var()
         if vehicle_success[1]:
             self.run_lpr()
-
-    def cam_size(self):
-        self.first_size = (300, 300)
 
 
 if __name__ == "__main__":

@@ -3,11 +3,11 @@ import time
 from pathlib import Path
 from time import monotonic
 
+import blobconverter
 import cv2
 import depthai as dai
 import numpy as np
-from imutils.video import FPS
-from rich import print
+from depthai_sdk import FPSHandler
 
 from demo_utils import multiclass_nms, demo_postprocess
 from visualize import vis
@@ -82,6 +82,19 @@ if not args.camera and not args.video:
 
 debug = not args.no_debug
 
+# To use a different NN, change `size` and `nnPath` here:
+parentDir = Path(__file__).parent
+shaves = 6 if args.camera else 8
+blobconverter.set_defaults(output_dir=parentDir / Path("models"))
+size = (320, 320)
+nnPath = blobconverter.from_onnx(
+    model=(parentDir / Path("models/helmet_detection_yolox.onnx")).as_posix(),
+    optimizer_params=[
+        "--scale_values=[58.395, 57.12 , 57.375]",
+        "--mean_values=[123.675, 116.28 , 103.53]",
+    ],
+    shaves=shaves,
+)
 
 def to_tensor_result(packet):
     data = {}
@@ -117,7 +130,7 @@ def to_planar(arr: np.ndarray, input_size: tuple = None) -> np.ndarray:
     resize_ = (np.array(img.shape[:2]) * r).astype(int)
     resized_img = cv2.resize(
         img,
-        resize_[::-1],
+        tuple(resize_[::-1]),
         interpolation=cv2.INTER_LINEAR,
     )
     padding = (input_size - resize_) // 2
@@ -163,30 +176,18 @@ def create_pipeline():
         cam = pipeline.createColorCamera()
         cam.setPreviewSize(*args.input_shape[::-1])
         cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-        cam.setFps(30)
         cam.setInterleaved(False)
+        cam.setFps(60)
         cam.setBoardSocket(dai.CameraBoardSocket.RGB)
         cam_xout = pipeline.createXLinkOut()
         cam_xout.setStreamName("cam_out")
         cam.preview.link(cam_xout.input)
 
     # NeuralNetwork
-    print("Creating Pedestrian Detection Neural Network...")
+    print(f"Creating {Path(nnPath).stem} Network...")
     yoloDet = pipeline.createNeuralNetwork()
-    if args.camera:
-        yoloDet.setBlobPath(
-            Path("models/helmet_detection_yolox1_openvino_2021.4_6shave.blob")
-            .resolve()
-            .absolute()
-            .as_posix()
-        )
-    else:
-        yoloDet.setBlobPath(
-            Path("models/helmet_detection_yolox1_openvino_2021.4_8shave.blob")
-            .resolve()
-            .absolute()
-            .as_posix()
-        )
+    yoloDet.setBlobPath(nnPath)
+
     yolox_det_nn_xout = pipeline.createXLinkOut()
     yolox_det_nn_xout.setStreamName("yolox_det_nn")
     yoloDet.out.link(yolox_det_nn_xout.input)
@@ -229,6 +230,9 @@ with dai.Device(create_pipeline()) as device:
         print("CAP_PROP_FRAME_SHAPE: %s" % frame_shape)
         cap_fps = int(cap.get(cv2.CAP_PROP_FPS))
         print("CAP_PROP_FPS: %d" % cap_fps)
+        fps_handler = FPSHandler(cap)
+    else:
+        fps_handler = FPSHandler()
 
     if args.output_dir:
         output_shape = tuple(args.output_shape) if args.output_shape else frame_shape
@@ -266,10 +270,9 @@ with dai.Device(create_pipeline()) as device:
         else:
             return True, cam_out.get().getCvFrame()
 
-    fps = FPS()
-    fps.start()
     while should_run():
         read_correctly, frame = get_frame()
+        fps_handler.tick("Frame")
         if not read_correctly:
             break
 
@@ -280,8 +283,8 @@ with dai.Device(create_pipeline()) as device:
         else:
             yolox_det_data = yolox_det_nn.tryGet()
         if yolox_det_data is not None:
-            fps.update()
             res = to_tensor_result(yolox_det_data).get("output")
+            fps_handler.tick("nn")
             predictions = demo_postprocess(res, (320, 320), p6=False)[0]
 
             boxes = predictions[:, :4]
@@ -321,7 +324,7 @@ with dai.Device(create_pipeline()) as device:
                 )
             else:
                 videoWriter.write(frame_debug)
-
+        fps_handler.drawFps(frame_debug,"Frame")
         r = (args.input_shape / np.array(frame.shape[:2])).max()
         if debug:
             cv2.imshow("debug", cv2.resize(frame_debug, (0, 0), fx=r, fy=r))
@@ -335,10 +338,9 @@ with dai.Device(create_pipeline()) as device:
                 "saved_%s.jpg" % time.strftime("%Y%m%d_%H%M%S", time.localtime()),
                 frame_debug,
             )
-fps.stop()
 if args.video:
     cap.release()
 if args.output_dir:
     videoWriter.release()
-print("NN FPS: %d" % fps.fps())
+print(fps_handler.printStatus())
 cv2.destroyAllWindows()

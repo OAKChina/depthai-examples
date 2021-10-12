@@ -7,8 +7,6 @@ import cv2
 import depthai
 import numpy as np
 
-# from scipy.special.cython_special import expit
-
 
 def timer(function):
     """
@@ -73,9 +71,8 @@ is_db = args.databases
 if args.camera and args.video:
     raise ValueError("命令行参数错误！ “ -cam” 不能与 “ -vid” 一起使用！")
 elif args.camera is False and args.video is None:
-    raise ValueError(
-        "缺少推理源！使用 “ -cam” 在 DepthAI 摄像机上运行，或使用 “ -vid <path>” 在视频文件上运行"
-    )
+    args.camera = True
+    print("缺少推理源！使用 “ -cam” 作为默认源")
 
 
 def wait_for_results(queue):

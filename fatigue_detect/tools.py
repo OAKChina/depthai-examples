@@ -1,8 +1,10 @@
-import numpy as np
-import cv2
 import math
 
-# 获取旋转向量和平移向量                        
+import cv2
+import numpy as np
+
+
+# Get rotation vector and translation vector
 def get_pose_estimation(img_size, image_points ):
     # 3D model points.
     model_points = np.array([
@@ -32,7 +34,7 @@ def get_pose_estimation(img_size, image_points ):
     # print("Translation Vector:\n {}".format(translation_vector))
     return success, rotation_vector, translation_vector, camera_matrix, dist_coeffs
 
-# 从旋转向量转换为欧拉角
+# Convert from rotation vector to Euler angle
 def get_euler_angle(rotation_vector):
     # calculate rotation angles
     theta = cv2.norm(rotation_vector, cv2.NORM_L2)
@@ -65,7 +67,7 @@ def get_euler_angle(rotation_vector):
     
     # print('pitch:{}, yaw:{}, roll:{}'.format(pitch, yaw, roll))
     
-	# 单位转换：将弧度转换为度
+	# Unit conversion: convert radians to degrees
     Y = int((pitch/math.pi)*180)
     X = int((yaw/math.pi)*180)
     Z = int((roll/math.pi)*180)

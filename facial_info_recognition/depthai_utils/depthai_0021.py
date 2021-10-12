@@ -1,8 +1,9 @@
 # coding=utf-8
 from pathlib import Path
 
-from .utils import *
 from imutils.video import FPS
+
+from .utils import *
 
 
 class DepthAI:
@@ -32,7 +33,7 @@ class DepthAI:
             self.cam = self.pipeline.createColorCamera()
             self.cam.setPreviewSize(self._cam_size[1], self._cam_size[0])
             self.cam.setResolution(
-                depthai.ColorCameraProperties.SensorResolution.THE_4_K
+                depthai.ColorCameraProperties.SensorResolution.THE_1080_P
             )
             self.cam.setInterleaved(False)
             self.cam.setBoardSocket(depthai.CameraBoardSocket.RGB)
@@ -64,9 +65,9 @@ class DepthAI:
         :return:
         """
         # NeuralNetwork
-        print(f"Creating {model_path} Neural Network...")
+        print(f"Creating {Path(model_path).stem} Neural Network...")
         model_nn = self.pipeline.createNeuralNetwork()
-        model_nn.setBlobPath(str(Path(f"{model_path}").resolve().absolute()))
+        model_nn.setBlobPath(str(Path(model_path).resolve().absolute()))
 
         if first and self.camera:
             self.cam.preview.link(model_nn.input)
