@@ -1,6 +1,6 @@
 scipy==1.5.0
-numpy==1.19.4
-opencv-python==4.2.0.34; platform_machine != "armv7l"
-opencv-python==4.1.0.25; platform_machine == "armv7l"
---extra-index-url https://artifacts.luxonis.com/artifactory/luxonis-python-snapshot-local/
-depthai==0.0.2.1+ab14564b91fd7cdd98a70ccda438cf1482839
+numpy>=1.19.4
+opencv-python>=4.2.0.34; platform_machine != "armv7l"
+opencv-python>=4.1.0.25; platform_machine == "armv7l"
+depthai>=2.10.0
+blobconverter>=1.2.2

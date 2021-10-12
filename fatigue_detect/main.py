@@ -1,32 +1,53 @@
 import argparse
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
-import cv2
-import numpy as np
+
+import blobconverter
 import depthai
-from scipy.spatial.distance import euclidean
-import os
-import time
-from tools import *
 from imutils.video import FPS
+from scipy.spatial.distance import euclidean
+
+from tools import *
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-nd', '--no-debug', action="store_true", help="Prevent debug output")
-parser.add_argument('-cam', '--camera', action="store_true", help="Use DepthAI 4K RGB camera for inference (conflicts with -vid)")
-parser.add_argument('-vid', '--video', type=str, help="Path to video file to be used for inference (conflicts with -cam)")
+parser.add_argument(
+    "-nd", "--no-debug", action="store_true", help="Prevent debug output"
+)
+parser.add_argument(
+    "-cam",
+    "--camera",
+    action="store_true",
+    help="Use DepthAI 4K RGB camera for inference (conflicts with -vid)",
+)
+parser.add_argument(
+    "-vid",
+    "--video",
+    type=str,
+    help="Path to video file to be used for inference (conflicts with -cam)",
+)
 args = parser.parse_args()
 
 debug = not args.no_debug
 
 if args.camera and args.video:
-    raise ValueError("Incorrect command line parameters! \"-cam\" cannot be used with \"-vid\"!")
+    raise ValueError(
+        'Incorrect command line parameters! "-cam" cannot be used with "-vid"!'
+    )
 elif args.camera is False and args.video is None:
-    raise ValueError("Missing inference source! Either use \"-cam\" to run on DepthAI camera or \"-vid <path>\" to run on video file")
+    raise ValueError(
+        'Missing inference source! Either use "-cam" to run on DepthAI camera or "-vid <path>" to run on video file'
+    )
+
+parentDir = Path(__file__).parent
+shaves = 6 if args.camera else 8
+blobconverter.set_defaults(output_dir=parentDir / Path("models"))
+
 
 def timer(function):
     """
-    装饰器函数timer
-    :param function:想要计时的函数
+    Decorator function timer
+    :param function:The function you want to time
     :return:
     """
 
@@ -34,10 +55,11 @@ def timer(function):
         time_start = time.time()
         res = function(*args, **kwargs)
         cost_time = time.time() - time_start
-        print("【 %s 】运行时间：【 %s 】秒" % (function.__name__, cost_time))
+        print("【 %s 】operation hours：【 %s 】second" % (function.__name__, cost_time))
         return res
 
     return wrapper
+
 
 def wait_for_results(queue):
     start = datetime.now()
@@ -48,8 +70,12 @@ def wait_for_results(queue):
 
 
 def to_planar(arr: np.ndarray, shape: tuple) -> list:
-    return [val for channel in cv2.resize(arr, shape).transpose(2, 0, 1) for y_col in channel for val in y_col]
-
+    return [
+        val
+        for channel in cv2.resize(arr, shape).transpose(2, 0, 1)
+        for y_col in channel
+        for val in y_col
+    ]
 
 
 def to_nn_result(nn_data):
@@ -66,13 +92,14 @@ def to_tensor_result(packet):
 def to_bbox_result(nn_data):
     try:
         arr = to_nn_result(nn_data)
-        arr = arr[:np.where(arr == -1)[0][0]]
+        arr = arr[: np.where(arr == -1)[0][0]]
         arr = arr.reshape((arr.size // 7, 7))
         return arr
     except:
         return []
 
-#@timer
+
+# @timer
 def run_nn(x_in, x_out, in_dict):
     nn_data = depthai.NNData()
     for key in in_dict:
@@ -94,12 +121,73 @@ def frame_norm(frame, *xy_vals):
             result.append(max(0, min(height, int(val * height))))
     return result
 
+
+def create_pipeline(camera):
+    print("Creating pipeline...")
+    pipeline = depthai.Pipeline()
+    if camera:
+        print("Creating Color Camera...")
+        cam = pipeline.createColorCamera()
+        cam.setPreviewSize(300, 300)
+        cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
+        cam.setInterleaved(False)
+        cam.setBoardSocket(depthai.CameraBoardSocket.RGB)
+        cam_xout = pipeline.createXLinkOut()
+        cam_xout.setStreamName("cam_out")
+        cam.preview.link(cam_xout.input)
+        first_model(
+            pipeline,
+            cam,
+            blobconverter.from_zoo("face-detection-retail-0004", shaves=6),
+            "face",
+        )
+    else:
+        models(
+            pipeline,
+            blobconverter.from_zoo("face-detection-retail-0004", shaves=8),
+            "face",
+        )
+    # https://github.com/PINTO0309/PINTO_model_zoo/tree/main/043_face_landmark
+    models(
+        pipeline,
+        blobconverter.from_openvino(
+            "models/face_landmark_160x160.xml",
+            "models/face_landmark_160x160.bin",
+            shaves=shaves,
+        ),
+        "land68",
+    )
+    return pipeline
+
+
+def first_model(pipeline, cam, model_path, name):
+    print(f"Start creating {Path(model_path).stem} Neural Networks")
+    model_nn = pipeline.createNeuralNetwork()
+    model_nn.setBlobPath(str(Path(model_path).resolve().absolute()))
+    cam.preview.link(model_nn.input)
+    model_nn_xout = pipeline.createXLinkOut()
+    model_nn_xout.setStreamName(f"{name}_nn")
+    model_nn.out.link(model_nn_xout.input)
+
+
+def models(pipeline, model_path, name):
+    print(f"Start creating {Path(model_path).stem} Neural Networks")
+    model_in = pipeline.createXLinkIn()
+    model_in.setStreamName(f"{name}_in")
+    model_nn = pipeline.createNeuralNetwork()
+    model_nn.setBlobPath(str(Path(model_path).resolve().absolute()))
+    model_nn_xout = pipeline.createXLinkOut()
+    model_nn_xout.setStreamName(f"{name}_nn")
+    model_in.out.link(model_nn.input)
+    model_nn.out.link(model_nn_xout.input)
+
+
 class Main:
-    def __init__(self,file=None,camera=False):
+    def __init__(self, file=None, camera=False):
         print("Loading pipeline...")
         self.file = file
         self.camera = camera
-        self.create_pipeline()
+        self.pipeline = create_pipeline(self.camera)
         self.start_pipeline()
         self.COUNTER = 0
         self.mCOUNTER = 0
@@ -109,75 +197,33 @@ class Main:
         self.hTOTAL = 0
         self.fps = FPS()
         self.fps.start()
-    
-    def create_pipeline(self):
-        print("Creating pipeline...")
-        self.pipeline = depthai.Pipeline()
-        if self.camera:
-            print("Creating Color Camera...")
-            cam = self.pipeline.createColorCamera()
-            cam.setPreviewSize(300,300)
-            cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
-            cam.setInterleaved(False)
-            cam.setCamId(0)
-            cam_xout = self.pipeline.createXLinkOut()
-            cam_xout.setStreamName("cam_out")
-            cam.preview.link(cam_xout.input)
-        
-        self.models("models/face-detection-retail-0004.blob","face")
-        self.models("models/face_landmark_160x160.blob","land68")
-
-    def models(self,model_path,name):
-        print(f"开始创建{model_path}神经网络")
-        model_in = self.pipeline.createXLinkIn()
-        model_in.setStreamName(f"{name}_in")
-        model_nn = self.pipeline.createNeuralNetwork()
-        model_nn.setBlobPath(str(Path(model_path).resolve().absolute()))
-        model_nn_xout = self.pipeline.createXLinkOut()
-        model_nn_xout.setStreamName(f"{name}_nn")
-        model_in.out.link(model_nn.input)
-        model_nn.out.link(model_nn_xout.input)
 
     def start_pipeline(self):
-        self.device = depthai.Device(self.pipeline,usb2Mode=True)
+        self.device = depthai.Device(self.pipeline)
         print("Starting pipeline...")
-        self.device.startPipeline()
-        self.face_in = self.device.getInputQueue("face_in")
-        self.face_nn = self.device.getOutputQueue("face_nn")
-        self.land68_in = self.device.getInputQueue("land68_in")
-        self.land68_nn = self.device.getOutputQueue("land68_nn")
         if self.camera:
-            self.cam_out = self.device.getOutputQueue("cam_out", 1, True)
-    
-
-    def full_frame_cords(self, cords):
-        original_cords = self.face_coords[0]
-        return [
-            original_cords[0 if i % 2 == 0 else 1] + val
-            for i, val in enumerate(cords)
-        ]
-
-    def full_frame_bbox(self, bbox):
-        relative_cords = self.full_frame_cords(bbox)
-        height, width = self.frame.shape[:2]
-        y_min = max(0, relative_cords[1])
-        y_max = min(height, relative_cords[3])
-        x_min = max(0, relative_cords[0])
-        x_max = min(width, relative_cords[2])
-        result_frame = self.frame[y_min:y_max, x_min:x_max]
-        return result_frame, relative_cords
-
+            self.cam_out = self.device.getOutputQueue("cam_out", 4, False)
+        else:
+            self.face_in = self.device.getInputQueue("face_in", 4, False)
+        self.face_nn = self.device.getOutputQueue("face_nn", 4, False)
+        self.land68_in = self.device.getInputQueue("land68_in", 4, False)
+        self.land68_nn = self.device.getOutputQueue("land68_nn", 4, False)
 
     def draw_bbox(self, bbox, color):
-        cv2.rectangle(self.debug_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+        cv2.rectangle(
+            self.debug_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2
+        )
 
     def run_face(self):
-        nn_data = run_nn(self.face_in, self.face_nn, {"data": to_planar(self.frame, (300, 300))})
+        if self.camera:
+            nn_data = self.face_nn.tryGet()
+        else:
+            nn_data = run_nn(
+                self.face_in, self.face_nn, {"data": to_planar(self.frame, (300, 300))}
+            )
         results = to_bbox_result(nn_data)
         self.face_coords = [
-            frame_norm(self.frame, *obj[3:7])
-            for obj in results
-            if obj[2] > 0.4
+            frame_norm(self.frame, *obj[3:7]) for obj in results if obj[2] > 0.4
         ]
         if len(self.face_coords) == 0:
             return False
@@ -187,72 +233,123 @@ class Main:
                 face_coord[1] -= 15
                 face_coord[2] += 15
                 face_coord[3] += 15
-            self.face_frame = [self.frame[
-                face_coord[1]:face_coord[3],
-                face_coord[0]:face_coord[2]
-            ] for face_coord in self.face_coords]
-        if debug:  
+            self.face_frame = [
+                self.frame[face_coord[1] : face_coord[3], face_coord[0] : face_coord[2]]
+                for face_coord in self.face_coords
+            ]
+        if debug:
             for bbox in self.face_coords:
                 self.draw_bbox(bbox, (10, 245, 10))
         return True
 
-    def run_land68(self,face_frame,count):
+    def run_land68(self, face_frame, count):
         try:
-            nn_data = run_nn(self.land68_in,self.land68_nn, {"data": to_planar(face_frame, (160,160))})
+            nn_data = run_nn(
+                self.land68_in,
+                self.land68_nn,
+                {"data": to_planar(face_frame, (160, 160))},
+            )
             out = to_nn_result(nn_data)
-            result = frame_norm(face_frame,*out)
+            result = frame_norm(face_frame, *out)
             eye_left = []
             eye_right = []
             mouth = []
             hand_points = []
-            for i in range(72,84,2):
-                # cv2.circle(self.debug_frame,(result[i]+self.face_coords[count][0],result[i+1]+self.face_coords[count][1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
-                eye_left.append((out[i],out[i+1]))
-            for i in range(84,96,2):
-                # cv2.circle(self.debug_frame,(result[i]+self.face_coords[count][0],result[i+1]+self.face_coords[count][1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
-                eye_right.append((out[i],out[i+1]))
-            for i in range(96,len(result),2):
-                # cv2.circle(self.debug_frame,(result[i]+self.face_coords[count][0],result[i+1]+self.face_coords[count][1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
+            for i in range(72, 84, 2):
+                eye_left.append((out[i], out[i + 1]))
+            for i in range(84, 96, 2):
+                eye_right.append((out[i], out[i + 1]))
+            for i in range(96, len(result), 2):
                 if i == 100 or i == 116 or i == 104 or i == 112 or i == 96 or i == 108:
-                    # cv2.circle(self.debug_frame,(result[i]+self.face_coords[count][0],result[i+1]+self.face_coords[count][1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
-                    mouth.append(np.array([out[i],out[i+1]]))
+                    mouth.append(np.array([out[i], out[i + 1]]))
 
-            for i in range(16,110,2):
+            for i in range(16, 110, 2):
                 if i == 16 or i == 60 or i == 72 or i == 90 or i == 96 or i == 108:
-                    cv2.circle(self.debug_frame,(result[i]+self.face_coords[count][0],result[i+1]+self.face_coords[count][1]),2,(255,0,0),thickness=1,lineType=8,shift=0)
-                    hand_points.append((result[i]+self.face_coords[count][0],result[i+1]+self.face_coords[count][1]))
-            
+                    cv2.circle(
+                        self.debug_frame,
+                        (
+                            result[i] + self.face_coords[count][0],
+                            result[i + 1] + self.face_coords[count][1],
+                        ),
+                        2,
+                        (255, 0, 0),
+                        thickness=1,
+                        lineType=8,
+                        shift=0,
+                    )
+                    hand_points.append(
+                        (
+                            result[i] + self.face_coords[count][0],
+                            result[i + 1] + self.face_coords[count][1],
+                        )
+                    )
 
-            ret, rotation_vector, translation_vector, camera_matrix, dist_coeffs = get_pose_estimation(self.frame.shape, np.array(hand_points,dtype='double'))
+            (
+                ret,
+                rotation_vector,
+                translation_vector,
+                camera_matrix,
+                dist_coeffs,
+            ) = get_pose_estimation(
+                self.frame.shape, np.array(hand_points, dtype="double")
+            )
             ret, pitch, yaw, roll = get_euler_angle(rotation_vector)
-            (nose_end_point2D, jacobian) = cv2.projectPoints(np.array([(0.0, 0.0, 1000.0)]), rotation_vector, translation_vector, camera_matrix, dist_coeffs)
-            p1 = ( int(hand_points[1][0]), int(hand_points[1][1]))
-            p2 = ( int(nose_end_point2D[0][0][0]), int(nose_end_point2D[0][0][1]))
-            cv2.line(self.debug_frame, p1, p2, (255,0,0), 2)
-            euler_angle_str = 'Y:{}, X:{}, Z:{}'.format(pitch, yaw, roll)
-            cv2.putText(self.debug_frame,euler_angle_str,(10,20),cv2.FONT_HERSHEY_COMPLEX_SMALL,0.5,(0,0,255))
-            # print(euler_angle_str)
+            (nose_end_point2D, jacobian) = cv2.projectPoints(
+                np.array([(0.0, 0.0, 1000.0)]),
+                rotation_vector,
+                translation_vector,
+                camera_matrix,
+                dist_coeffs,
+            )
+            p1 = (int(hand_points[1][0]), int(hand_points[1][1]))
+            p2 = (int(nose_end_point2D[0][0][0]), int(nose_end_point2D[0][0][1]))
+            cv2.line(self.debug_frame, p1, p2, (255, 0, 0), 2)
+            euler_angle_str = "Y:{}, X:{}, Z:{}".format(pitch, yaw, roll)
+            cv2.putText(
+                self.debug_frame,
+                euler_angle_str,
+                (10, 20),
+                cv2.FONT_HERSHEY_COMPLEX_SMALL,
+                0.5,
+                (0, 0, 255),
+            )
             if pitch < 0:
                 self.hCOUNTER += 1
                 if self.hCOUNTER >= 20:
-                    cv2.putText(self.debug_frame,"SLEEP!!!",(self.face_coords[count][0],self.face_coords[count][1]-10),cv2.FONT_HERSHEY_COMPLEX,1,(0,0,255),3)
+                    cv2.putText(
+                        self.debug_frame,
+                        "SLEEP!!!",
+                        (self.face_coords[count][0], self.face_coords[count][1] - 10),
+                        cv2.FONT_HERSHEY_COMPLEX,
+                        1,
+                        (0, 0, 255),
+                        3,
+                    )
             else:
                 if self.hCOUNTER >= 3:
                     self.hTOTAL += 1
                 self.hCOUNTER = 0
-            
+
             left_ear = self.eye_aspect_ratio(eye_left)
             right_ear = self.eye_aspect_ratio(eye_right)
             ear = (left_ear + right_ear) / 2.0
-            if ear < 0.15:# 眼睛长宽比：0.15
+            if ear < 0.15:  # Eye aspect ratio：0.15
                 self.COUNTER += 1
                 if self.COUNTER >= 20:
-                    cv2.putText(self.debug_frame, "SLEEP!!!", (self.face_coords[count][0], self.face_coords[count][1]-10),cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+                    cv2.putText(
+                        self.debug_frame,
+                        "SLEEP!!!",
+                        (self.face_coords[count][0], self.face_coords[count][1] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0, 0, 255),
+                        3,
+                    )
             else:
-                # 如果连续3次都小于阈值，则表示进行了一次眨眼活动
-                if self.COUNTER >= 3:# 阈值：3
+                # If it is less than the threshold 3 times in a row, it means that an eye blink has been performed
+                if self.COUNTER >= 3:  # Threshold: 3
                     self.TOTAL += 1
-                # 重置眼帧计数器
+                # Reset the eye frame counter
                 self.COUNTER = 0
 
             mouth_ratio = self.mouth_aspect_ratio(mouth)
@@ -263,24 +360,44 @@ class Main:
                     self.mTOTAL += 1
                 self.mCOUNTER = 0
 
-            # print(self.TOTAL,self.mTOTAL,self.hTOTAL)
-            cv2.putText(self.debug_frame,"eye:{:d},mouth:{:d},head:{:d}".format(self.TOTAL,self.mTOTAL,self.hTOTAL),(10,40),cv2.FONT_HERSHEY_COMPLEX_SMALL,0.5,(255,0,0,))
-            if self.TOTAL >= 50 or self.mTOTAL>=15 or self.hTOTAL >= 10:
-                cv2.putText(self.debug_frame, "Danger!!!", (100, 200),cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+            cv2.putText(
+                self.debug_frame,
+                "eye:{:d},mouth:{:d},head:{:d}".format(
+                    self.TOTAL, self.mTOTAL, self.hTOTAL
+                ),
+                (10, 40),
+                cv2.FONT_HERSHEY_COMPLEX_SMALL,
+                0.5,
+                (
+                    255,
+                    0,
+                    0,
+                ),
+            )
+            if self.TOTAL >= 50 or self.mTOTAL >= 15 or self.hTOTAL >= 10:
+                cv2.putText(
+                    self.debug_frame,
+                    "Danger!!!",
+                    (100, 200),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 0, 255),
+                    3,
+                )
         except:
             pass
-    
-    def mouth_aspect_ratio(self,mouth):
+
+    def mouth_aspect_ratio(self, mouth):
         A = np.linalg.norm(mouth[1] - mouth[5])  # 51, 59
         B = np.linalg.norm(mouth[2] - mouth[4])  # 53, 57
         C = np.linalg.norm(mouth[0] - mouth[3])  # 49, 55
         mar = (A + B) / (2.0 * C)
         return mar
 
-    def eye_aspect_ratio(self,eye):
-        A = euclidean(eye[1],eye[5])
-        B = euclidean(eye[2],eye[4])
-        C = euclidean(eye[0],eye[3])
+    def eye_aspect_ratio(self, eye):
+        A = euclidean(eye[1], eye[5])
+        B = euclidean(eye[2], eye[4])
+        C = euclidean(eye[0], eye[3])
         return (A + B) / (2.0 * C)
 
     def parse(self):
@@ -290,11 +407,15 @@ class Main:
         face_success = self.run_face()
         if face_success:
             for i in range(len(self.face_frame)):
-                self.run_land68(self.face_frame[i],i)
+                self.run_land68(self.face_frame[i], i)
+            self.fps.update()
         if debug:
             aspect_ratio = self.frame.shape[1] / self.frame.shape[0]
-            cv2.imshow("Camera_view", cv2.resize(self.debug_frame, ( int(900),  int(900 / aspect_ratio))))
-            if cv2.waitKey(1) == ord('q'):
+            cv2.imshow(
+                "Camera_view",
+                cv2.resize(self.debug_frame, (int(900), int(900 / aspect_ratio))),
+            )
+            if cv2.waitKey(1) == ord("q"):
                 cv2.destroyAllWindows()
                 raise StopIteration()
 
@@ -313,13 +434,18 @@ class Main:
 
     def run_camera(self):
         while True:
-            self.frame = np.array(self.cam_out.get().getData()).reshape((3, 300, 300)).transpose(1, 2, 0).astype(np.uint8)
-            self.fps.update()
+            rgb_in = self.cam_out.get()
+            self.frame = (
+                np.array(rgb_in.getData())
+                .reshape((3, rgb_in.getHeight(), rgb_in.getWidth()))
+                .transpose(1, 2, 0)
+                .astype(np.uint8)
+            )
             try:
                 self.parse()
             except StopIteration:
                 break
-    
+
     def run(self):
         if self.file is not None:
             self.run_video()
@@ -329,7 +455,8 @@ class Main:
         print("FPS:{:.2f}".format(self.fps.fps()))
         del self.device
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     if args.video:
         Main(file=args.video).run()
     else:

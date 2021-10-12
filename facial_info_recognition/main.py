@@ -1,8 +1,13 @@
 # coding=utf-8
 from queue import Queue
 
+import blobconverter
+
 from depthai_utils import *
 
+parentDir = Path(__file__).parent
+shaves = 6 if args.camera else 8
+blobconverter.set_defaults(output_dir=parentDir / Path("models"))
 
 class Main(DepthAI):
     def __init__(self, file=None, camera=False):
@@ -12,9 +17,12 @@ class Main(DepthAI):
         self.emo_frame = Queue()
 
     def create_nns(self):
-        self.create_nn("models/face-detection-retail-0004.blob", "face")
-        self.create_nn("models/age-gender-recognition-retail-0013.blob", "ag")
-        self.create_nn("models/emotions-recognition-retail-0003.blob", "emo")
+        self.create_nn(blobconverter.from_zoo("face-detection-retail-0004", shaves=shaves),
+                       "face")
+        self.create_nn(blobconverter.from_zoo("age-gender-recognition-retail-0013", shaves=shaves),
+                       "ag")
+        self.create_nn(blobconverter.from_zoo("emotions-recognition-retail-0003", shaves=shaves),
+                       "emo")
 
     def start_nns(self):
         self.face_in = self.device.getInputQueue("face_in")

@@ -5,7 +5,7 @@
 
 本演示展示了目标检测网络。您可以在演示中使用以下一组预先训练的模型：
 
--   [`helmet_detection`](models/helmet_detection_yolox1_openvino_2021.4_6shave.blob) 是目标检测网络
+-   [`helmet_detection`](models/helmet_detection_yolox_openvino_2021.4_6shave.blob) 是目标检测网络
 
 安装依赖项
 ----------

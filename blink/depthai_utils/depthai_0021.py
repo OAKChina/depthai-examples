@@ -1,8 +1,9 @@
 # coding=utf-8
 from pathlib import Path
 
-from .utils import *
 from imutils.video import FPS
+
+from .utils import *
 
 
 class DepthAI:
@@ -16,7 +17,8 @@ class DepthAI:
         self.file = file
         self.camera = camera
         # self.cam_size()
-        self.fps = FPS()
+        self.fps_cam = FPS()
+        self.fps_nn = FPS()
         self.create_pipeline()
         self.start_pipeline()
         self.fontScale = 1 if self.camera else 2
@@ -35,7 +37,8 @@ class DepthAI:
                 depthai.ColorCameraProperties.SensorResolution.THE_1080_P
             )
             self.cam.setInterleaved(False)
-            self.cam.setBoardSocket(depthai.CameraBoardSocket.RGB)
+            self.cam.setBoardSocket(depthai.CameraBoardSocket.LEFT)
+            self.cam.setColorOrder(depthai.ColorCameraProperties.ColorOrder.BGR)
 
             self.cam_xout = self.pipeline.createXLinkOut()
             if self.HD:
@@ -64,12 +67,53 @@ class DepthAI:
         :return:
         """
         # NeuralNetwork
-        print(f"Creating {model_path} Neural Network...")
+        print(f"Creating {Path(model_path).stem} Neural Network...")
         model_nn = self.pipeline.createNeuralNetwork()
-        model_nn.setBlobPath(str(Path(f"{model_path}").resolve().absolute()))
+        model_nn.setBlobPath(str(Path(model_path).resolve().absolute()))
+        model_nn.input.setBlocking(False)
+        if first and self.camera:
+            print('linked cam.preview to model_nn.input')
+            self.cam.preview.link(model_nn.input)
+            # model_nn.passthrough.link(self.cam_xout.input)
+        else:
+            model_in = self.pipeline.createXLinkIn()
+            model_in.setStreamName(f"{model_name}_in")
+            model_in.out.link(model_nn.input)
+
+        model_nn_xout = self.pipeline.createXLinkOut()
+        model_nn_xout.setStreamName(f"{model_name}_nn")
+        model_nn.out.link(model_nn_xout.input)
+
+        # model_nn_passthrough = self.pipeline.createXLinkOut()
+        # model_nn_passthrough.setStreamName("model_passthrough")
+        # model_nn_passthrough.setMetadataOnly(True)
+
+    def create_mobilenet_nn(
+        self,
+        model_path: str,
+        model_name: str,
+        conf: float = 0.5,
+        first: bool = False,
+    ):
+        """
+
+        :param model_path: 模型名称
+        :param model_name: 模型简称
+        :param conf: 置信度阈值
+        :param first: 是否为首个模型
+        :return:
+        """
+        # NeuralNetwork
+        print(f"Creating {Path(model_path).stem} Neural Network...")
+        model_nn = self.pipeline.createMobileNetDetectionNetwork()
+        model_nn.setBlobPath(str(Path(model_path).resolve().absolute()))
+        model_nn.setConfidenceThreshold(conf)
+        model_nn.input.setBlocking(False)
 
         if first and self.camera:
             self.cam.preview.link(model_nn.input)
+            if not self.HD:
+                model_nn.passthrough.link(self.cam_xout.input)
         else:
             model_in = self.pipeline.createXLinkIn()
             model_in.setStreamName(f"{model_name}_in")
@@ -81,21 +125,16 @@ class DepthAI:
 
     def start_pipeline(self):
         try:
-            self.device = depthai.Device()
-            print("Starting pipeline...")
-            self.device.startPipeline(self.pipeline)
-        except TypeError:
+            self.device = depthai.Device(self.pipeline)
+        except:
             found, device_info = depthai.XLinkConnection.getFirstDevice(
                 depthai.XLinkDeviceState.X_LINK_UNBOOTED
             )
             if not found:
                 raise RuntimeError("Device not found")
-            # self.device = depthai.Device(self.pipeline, device_info)
-            self.device = depthai.Device(self.pipeline)
-            print("Starting pipeline...")
-            self.device.startPipeline()
-        except RuntimeError:
-            return
+            self.device = depthai.Device(self.pipeline, device_info)
+        print("Starting pipeline...")
+        self.device.startPipeline()
 
         self.start_nns()
 
@@ -156,13 +195,16 @@ class DepthAI:
             cv2.imshow(
                 "Camera_view",
                 self.debug_frame,
-                # cv2.resize(self.debug_frame, (int(900), int(900 / aspect_ratio))),
+                # cv2.resize(
+                #     self.debug_frame, (int(900), int(900 / aspect_ratio))
+                # ),
             )
-            self.fps.update()
+            self.fps_cam.update()
             if cv2.waitKey(1) == ord("q"):
                 cv2.destroyAllWindows()
-                self.fps.stop()
-                print(f"FPS: {self.fps.fps():.2f}")
+                self.fps_cam.stop()
+                self.fps_nn.stop()
+                print(f"FPS_CAMERA: {self.fps_cam.fps():.2f} , FPS_NN: {self.fps_nn.fps():.2f}")
                 raise StopIteration()
 
     def parse_fun(self):
@@ -192,6 +234,11 @@ class DepthAI:
                     h = in_video.getHeight()
                     yuv420p = packet_data.reshape((-1, w))
                     self.frame = cv2.cvtColor(yuv420p, cv2.COLOR_YUV2BGR_NV12)
+
+                    # Get BGR frame from NV12 encoded video frame
+                    # self.frame = in_video.getBgrFrame()
+                    # cv2.imshow('', in_video.getBgrFrame())
+
                     try:
                         self.parse()
                     except StopIteration:
@@ -200,15 +247,9 @@ class DepthAI:
             while True:
                 in_rgb = self.preview.tryGet()
                 if in_rgb is not None:
-                    shape = (3, in_rgb.getHeight(), in_rgb.getWidth())
-
-                    self.frame = (
-                        in_rgb.getData()
-                        .reshape(shape)
-                        .transpose(1, 2, 0)
-                        .astype(np.uint8)
-                    )
-                    self.frame = np.ascontiguousarray(self.frame)
+                    self.frame = in_rgb.getCvFrame()
+                    # self.frame = in_rgb.getFrame()
+                    # cv2.imshow('', in_rgb.getFrame())
                     try:
                         self.parse()
                     except StopIteration:
@@ -225,7 +266,8 @@ class DepthAI:
         self._cam_size = v
 
     def run(self):
-        self.fps.start()
+        self.fps_cam.start()
+        self.fps_nn.start()
         if self.file is not None:
             self.run_video()
         else:

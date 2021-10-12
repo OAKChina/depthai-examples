@@ -6,8 +6,6 @@ from datetime import datetime, timedelta
 import cv2
 import depthai
 import numpy as np
-import pretty_errors
-from scipy.special.cython_special import expit
 
 
 def timer(function):
@@ -34,8 +32,16 @@ parser.add_argument(
     "-cam",
     "--camera",
     action="store_true",
+    default=True,
     help="使用 DepthAI 4K RGB 摄像头进行推理 (与 -vid 冲突)",
 )
+
+parser.add_argument(
+    "-hd",
+    action="store_true",
+    help="输出高清视频",
+)
+
 parser.add_argument(
     "-vid",
     "--video",
@@ -84,13 +90,91 @@ def wait_for_results(queue):
     return True
 
 
-def to_planar(arr: np.ndarray, shape: tuple) -> list:
-    return [
-        val
-        for channel in cv2.resize(arr, shape).transpose(2, 0, 1)
-        for y_col in channel
-        for val in y_col
-    ]
+def resize_padding(img: np.ndarray, fixed_h, fixed_w, bgr: list = None):
+    """
+    图像等比例缩放并填充
+
+    :param img: cv2所读取的图像
+    :param fixed_h: 期望的高
+    :param fixed_w: 期望的宽
+    :param bgr: 填充颜色，默认黑色
+    :return: pad_img,top,left
+    """
+    if bgr is None:
+        bgr = [0, 0, 0]
+    h, w = img.shape[:2]
+    scale = max(w / fixed_w, h / fixed_h)  # 获取缩放比例
+    new_w, new_h = int(w / scale), int(h / scale)
+    resize_img = cv2.resize(img, (new_w, new_h))  # 按比例缩放
+
+    # 计算需要填充的像素长度
+    if new_w % 2 != 0 and new_h % 2 == 0:
+        top, bottom, left, right = (
+            (fixed_h - new_h) // 2,
+            (fixed_h - new_h) // 2,
+            (fixed_w - new_w) // 2 + 1,
+            (fixed_w - new_w) // 2,
+        )
+    elif new_w % 2 == 0 and new_h % 2 != 0:
+        top, bottom, left, right = (
+            (fixed_h - new_h) // 2 + 1,
+            (fixed_h - new_h) // 2,
+            (fixed_w - new_w) // 2,
+            (fixed_w - new_w) // 2,
+        )
+    elif new_w % 2 == 0 and new_h % 2 == 0:
+        top, bottom, left, right = (
+            (fixed_h - new_h) // 2,
+            (fixed_h - new_h) // 2,
+            (fixed_w - new_w) // 2,
+            (fixed_w - new_w) // 2,
+        )
+    else:
+        top, bottom, left, right = (
+            (fixed_h - new_h) // 2 + 1,
+            (fixed_h - new_h) // 2,
+            (fixed_w - new_w) // 2 + 1,
+            (fixed_w - new_w) // 2,
+        )
+
+    # 填充图像
+    pad_img = cv2.copyMakeBorder(
+        resize_img,
+        top,
+        bottom,
+        left,
+        right,
+        cv2.BORDER_CONSTANT,
+        value=bgr,
+    )
+
+    return (
+        pad_img,
+        scale,
+        top,
+        left,
+    )
+
+
+def restore_point(point, scale, top, left):
+    return (np.array(point).reshape(-1, 2) - (left, top)) * scale
+
+
+def to_planar(arr: np.ndarray, shape: tuple):
+    """
+
+    :param arr: cv2所读取的图像
+    :param shape: (h, w)
+    :return:
+    """
+
+    return cv2.resize(arr, shape).transpose((2, 0, 1)).flatten()
+    # return [
+    #     val
+    #     for channel in cv2.resize(arr, shape).transpose(2, 0, 1)
+    #     for y_col in channel
+    #     for val in y_col
+    # ]
 
 
 def to_nn_result(nn_data):
@@ -111,6 +195,10 @@ def to_tensor_result(packet):
         name: np.array(packet.getLayerFp16(name))
         for name in [tensor.name for tensor in packet.getRaw().tensors]
     }
+    # return {
+    #     tensor.name: np.array(packet.getLayerFp16(tensor.name)).reshape(tensor.dims)
+    #     for tensor in packet.getRaw().tensors
+    # }
 
 
 # @timer
@@ -121,9 +209,76 @@ def to_bbox_result(nn_data):
     :return:
     """
     arr = to_nn_result(nn_data)
-    arr = arr[: np.where(arr == -1)[0][0]]
+    if np.argwhere(arr == -1).size > 0:
+        arr = arr[: np.argwhere(arr == -1)[0][0]]
     arr = arr.reshape((arr.size // 7, 7))
     return arr
+
+
+def distance(pt1, pt2):
+    """
+    两点间距离
+    """
+    assert len(pt1) == len(pt2), f"两点维度要一致，pt1:{len(pt1)}维, pt2:{len(pt2)}维"
+    return np.sqrt(np.float_power(np.array(pt1) - pt2, 2).sum())
+
+
+def point_mapping(dot, center, original_side_length, target_side_length):
+    """
+
+    :param dot: 点座标
+    :param center: 帧中心点座标
+    :param original_side_length: 源边长
+    :param target_side_length: 目标边长
+    :return:
+    """
+    if isinstance(original_side_length, (int, float)):
+        original_side_length = np.array((original_side_length, original_side_length))
+    if isinstance(target_side_length, (int, float)):
+        target_side_length = np.array((target_side_length, target_side_length))
+
+    return center + (np.array(dot) - center) * (
+            np.array(target_side_length) / original_side_length
+    )
+
+
+def scale_bbox(bboxes, scale_size=1.5):
+    bboxes = bboxes.flatten()
+    scale_size = np.sqrt(scale_size)
+    bboxes_tmp = np.ones_like(bboxes)
+    bboxes_tmp[3] = (bboxes[3] + bboxes[1]) / 2 + scale_size * (
+            (bboxes[3] - bboxes[1]) / 2
+    )
+    bboxes_tmp[1] = (bboxes[3] + bboxes[1]) / 2 - scale_size * (
+            (bboxes[3] - bboxes[1]) / 2
+    )
+    bboxes_tmp[2] = (bboxes[2] + bboxes[0]) / 2 + scale_size * (
+            (bboxes[2] - bboxes[0]) / 2
+    )
+    bboxes_tmp[0] = (bboxes[2] + bboxes[0]) / 2 - scale_size * (
+            (bboxes[2] - bboxes[0]) / 2
+    )
+    return np.where(bboxes_tmp > 0, bboxes_tmp, 0)
+
+
+def scale_bboxes(bboxes, scale=True, scale_size=1.5):
+    bboxes = np.concatenate(bboxes).reshape(-1, 4)
+    bboxes_tmp = np.ones_like(bboxes)
+    if scale:
+        scale_size = np.sqrt(scale_size)
+        bboxes_tmp[:, 3] = (bboxes[:, 3] + bboxes[:, 1]) / 2 + scale_size * (
+                (bboxes[:, 3] - bboxes[:, 1]) / 2
+        )
+        bboxes_tmp[:, 1] = (bboxes[:, 3] + bboxes[:, 1]) / 2 - scale_size * (
+                (bboxes[:, 3] - bboxes[:, 1]) / 2
+        )
+        bboxes_tmp[:, 2] = (bboxes[:, 2] + bboxes[:, 0]) / 2 + scale_size * (
+                (bboxes[:, 2] - bboxes[:, 0]) / 2
+        )
+        bboxes_tmp[:, 0] = (bboxes[:, 2] + bboxes[:, 0]) / 2 - scale_size * (
+                (bboxes[:, 2] - bboxes[:, 0]) / 2
+        )
+    return np.where(bboxes_tmp > 0, bboxes_tmp, 0)
 
 
 # @timer
@@ -139,21 +294,32 @@ def run_nn(x_in, x_out, in_dict):
     for key in in_dict:
         nn_data.setLayer(key, in_dict[key])
     x_in.send(nn_data)
-    has_results = wait_for_results(x_out)
-    if not has_results:
-        raise RuntimeError("No data from nn!")
+    # has_results = wait_for_results(x_out)
+    # if not has_results:
+    #     raise RuntimeError("No data from nn!")
     return x_out.tryGet()
 
 
 def frame_norm(frame, *xy_vals):
-    height, width = frame.shape[:2]
-    result = []
-    for i, val in enumerate(xy_vals):
-        if i % 2 == 0:
-            result.append(max(0, min(width, int(val * width))))
-        else:
-            result.append(max(0, min(height, int(val * height))))
-    return result
+    """
+    nn data, being the bounding box locations, are in <0..1> range -
+    they need to be normalized with frame width/height
+
+    :param frame: (h, w) or frame
+    :param xy_vals: the bounding box locations
+    :return:
+    """
+    if isinstance(frame, np.ndarray):
+        return (
+                np.clip(np.array(xy_vals), 0, 1)
+                * np.array(frame.shape[:2] * (len(xy_vals) // 2))[::-1]
+        ).astype(int)
+    else:
+
+        return (
+                np.clip(np.array(xy_vals), 0, 1)
+                * np.array(frame * (len(xy_vals) // 2))[::-1]
+        ).astype(int)
 
 
 def draw_3d_axis(image, head_pose, origin, size=50):
@@ -164,18 +330,20 @@ def draw_3d_axis(image, head_pose, origin, size=50):
     # X axis (red)
     x1 = size * (np.cos(yaw) * np.cos(roll)) + origin[0]
     y1 = (
-        size
-        * (np.cos(pitch) * np.sin(roll) + np.cos(roll) * np.sin(pitch) * np.sin(yaw))
-        + origin[1]
+            size
+            * (np.cos(pitch) * np.sin(roll) + np.cos(roll) * np.sin(pitch) * np.sin(
+        yaw))
+            + origin[1]
     )
     cv2.line(image, (origin[0], origin[1]), (int(x1), int(y1)), (0, 0, 255), 3)
 
     # Y axis (green)
     x2 = size * (-np.cos(yaw) * np.sin(roll)) + origin[0]
     y2 = (
-        size
-        * (-np.cos(pitch) * np.cos(roll) - np.sin(pitch) * np.sin(yaw) * np.sin(roll))
-        + origin[1]
+            size
+            * (-np.cos(pitch) * np.cos(roll) - np.sin(pitch) * np.sin(yaw) * np.sin(
+        roll))
+            + origin[1]
     )
     cv2.line(image, (origin[0], origin[1]), (int(x2), int(y2)), (0, 255, 0), 3)
 
@@ -187,13 +355,15 @@ def draw_3d_axis(image, head_pose, origin, size=50):
     return image
 
 
-def correction(frame, coords):
-    angle = cv2.minAreaRect(coords)[-1]
-    angle = -(angle + 90) if angle < -45 else -angle
-    print(f"倾斜角度为：{angle}度")
+def correction(frame, coords, angle=None, invert=False):
+    if angle is None:
+        angle = cv2.minAreaRect(coords)[-1]
+        angle = -(angle + 90) if angle < -45 else -angle
+        # print(f"倾斜角度为：{angle}度")
     h, w = frame.shape[:2]
     center = (w // 2, h // 2)
-    mat = cv2.getRotationMatrix2D(center, angle, 0.8)
+    mat = cv2.getRotationMatrix2D(center, angle, 1)
+    affine = cv2.invertAffineTransform(mat).astype("float32")
     corr = cv2.warpAffine(
         frame,
         mat,
@@ -201,6 +371,8 @@ def correction(frame, coords):
         flags=cv2.INTER_CUBIC,
         borderMode=cv2.BORDER_CONSTANT,
     )
+    if invert:
+        return corr, affine
     return corr
 
 
@@ -234,6 +406,11 @@ def cosine_distance(a, b):
     return similarity
 
 
+def softmax(x):
+    output = np.exp(x - x.max(axis=-1, keepdims=True))
+    return output / output.sum(axis=-1, keepdims=True)
+
+
 def sigmoid(x):
     """sigmoid.
 
@@ -243,65 +420,73 @@ def sigmoid(x):
     (1. + np.tanh(.5 * x)) * .5 = 1. / (1. + np.exp(-x))
     sigmoid（x）==（1 + tanh（x / 2））/ 2
     """
-    return 1.0 / (1.0 + np.exp(-x))
+    # return 1.0 / (1.0 + np.exp(-x))
     # return expit(x)
-    # return (1.0 + np.tanh(0.5 * x)) * 0.5
+    return (1.0 + np.tanh(0.5 * x)) * 0.5
 
 
-_conf_threshold = 0.5
-
-
-def rotated_rectangle(bbox, angle):
-    x0, y0, x1, y1 = bbox
-    width = abs(x0 - x1)
-    height = abs(y0 - y1)
-    x = int(x0 + width * 0.5)
-    y = int(y0 + height * 0.5)
-
-    pt1_1 = (int(x + width / 2), int(y + height / 2))
-    pt2_1 = (int(x + width / 2), int(y - height / 2))
-    pt3_1 = (int(x - width / 2), int(y - height / 2))
-    pt4_1 = (int(x - width / 2), int(y + height / 2))
-
-    t = np.array(
-        [
-            [np.cos(angle), -np.sin(angle), x - x * np.cos(angle) + y * np.sin(angle)],
-            [np.sin(angle), np.cos(angle), y - x * np.sin(angle) - y * np.cos(angle)],
-            [0, 0, 1],
-        ]
-    )
-
-    tmp_pt1_1 = np.array([[pt1_1[0]], [pt1_1[1]], [1]])
-    tmp_pt1_2 = np.dot(t, tmp_pt1_1)
-    pt1_2 = (int(tmp_pt1_2[0][0]), int(tmp_pt1_2[1][0]))
-
-    tmp_pt2_1 = np.array([[pt2_1[0]], [pt2_1[1]], [1]])
-    tmp_pt2_2 = np.dot(t, tmp_pt2_1)
-    pt2_2 = (int(tmp_pt2_2[0][0]), int(tmp_pt2_2[1][0]))
-
-    tmp_pt3_1 = np.array([[pt3_1[0]], [pt3_1[1]], [1]])
-    tmp_pt3_2 = np.dot(t, tmp_pt3_1)
-    pt3_2 = (int(tmp_pt3_2[0][0]), int(tmp_pt3_2[1][0]))
-
-    tmp_pt4_1 = np.array([[pt4_1[0]], [pt4_1[1]], [1]])
-    tmp_pt4_2 = np.dot(t, tmp_pt4_1)
-    pt4_2 = (int(tmp_pt4_2[0][0]), int(tmp_pt4_2[1][0]))
-
-    points = np.array([pt1_2, pt2_2, pt3_2, pt4_2])
-
-    return points
-
-
-def non_max_suppression(boxes, probs=None, angles=None, overlapThresh=0.3):
+def decode_boxes(raw_boxes, anchors, shape, num_keypoints):
     """
-    NMS用于消除多重检测
+    使用锚点框将预测转换为实际坐标。一次处理整个批次。
 
-    :param boxes: boxes of objects. x1,y1,x2,y2
-    :param probs: scores of objects
-    :param angles:
-    :param overlapThresh:
-    :return: 返回已选择的边界框
+    Converts the predictions into actual coordinates using the anchor boxes.
+    Processes the entire batch at once.
     """
+    boxes = np.zeros_like(raw_boxes)
+    x_scale, y_scale = shape
+
+    x_center = raw_boxes[..., 0] / x_scale * anchors[:, 2] + anchors[:, 0]
+    y_center = raw_boxes[..., 1] / y_scale * anchors[:, 3] + anchors[:, 1]
+
+    w = raw_boxes[..., 2] / x_scale * anchors[:, 2]
+    h = raw_boxes[..., 3] / y_scale * anchors[:, 3]
+
+    boxes[..., 1] = y_center - h / 2.0  # xmin
+    boxes[..., 0] = x_center - w / 2.0  # ymin
+    boxes[..., 3] = y_center + h / 2.0  # xmax
+    boxes[..., 2] = x_center + w / 2.0  # ymax
+
+    for k in range(num_keypoints):
+        offset = 4 + k * 2
+        keypoint_x = raw_boxes[..., offset] / x_scale * anchors[:, 2] + anchors[:, 0]
+        keypoint_y = (
+                raw_boxes[..., offset + 1] / y_scale * anchors[:, 3] + anchors[:, 1]
+        )
+        boxes[..., offset] = keypoint_x
+        boxes[..., offset + 1] = keypoint_y
+
+    return boxes
+
+
+def raw_to_detections(raw_box_tensor, raw_score_tensor, anchors_, shape, num_keypoints):
+    """
+
+    This function converts these two "raw" tensors into proper detections.
+    Returns a list of (num_detections, 17) tensors, one for each image in
+    the batch.
+
+    This is based on the source code from:
+    mediapipe/calculators/tflite/tflite_tensors_to_detections_calculator.cc
+    mediapipe/calculators/tflite/tflite_tensors_to_detections_calculator.proto
+
+    :param num_keypoints:
+    :param shape:
+    :param raw_box_tensor: 神经网络的输出是一个形状为（b，896，16）的张量，其中包含边界框回归预测
+    :param raw_score_tensor: 具有分类置信度的形状张量（b，896，1）
+    :param anchors_: 锚点框
+    :return:
+    """
+    detection_boxes = decode_boxes(raw_box_tensor, anchors_, shape, num_keypoints)
+    detection_scores = sigmoid(raw_score_tensor).squeeze(-1)
+    output_detections = []
+    for i in range(raw_box_tensor.shape[0]):
+        boxes = detection_boxes[i]
+        scores = np.expand_dims(detection_scores[i], -1)
+        output_detections.append(np.concatenate((boxes, scores), -1))
+    return output_detections
+
+
+def non_max_suppression(boxes, probs=None, angles=None, overlapThresh=0.3,):
     # 如果没有框，则返回一个空列表
     if len(boxes) == 0:
         return [], []
@@ -357,94 +542,51 @@ def non_max_suppression(boxes, probs=None, angles=None, overlapThresh=0.3):
             idxs, np.concatenate(([last], np.where(overlap > overlapThresh)[0]))
         )
 
+    if angles is not None:
+        return boxes[pick].astype("int"), angles[pick]
     # 仅返回已选择的边界框
-    return boxes[pick].astype("int"), angles[pick]
+    return boxes[pick].astype("int")
 
 
-def decode_predictions(scores, geometry1, geometry2):
-    # 从分数卷中获取行数和列数，然后初始化我们的边界框矩形集和相应的置信度分数
-    (numRows, numCols) = scores.shape[2:4]
-    rects = []
-    confidences = []
-    angles = []
+def rotated_Rectangle(bbox, angle):
+    X0, Y0, X1, Y1 = bbox
+    width = abs(X0 - X1)
+    height = abs(Y0 - Y1)
+    x = int(X0 + width * 0.5)
+    y = int(Y0 + height * 0.5)
 
-    # 循环行数
-    for y in range(0, numRows):
-        # 提取分数（概率），然后提取几何数据，以得出围绕文本的潜在边界框坐标
-        scores_data = scores[0, 0, y]
-        x_data0 = geometry1[0, 0, y]
-        x_data1 = geometry1[0, 1, y]
-        x_data2 = geometry1[0, 2, y]
-        x_data3 = geometry1[0, 3, y]
-        angles_data = geometry2[0, 0, y]
+    pt1_1 = (int(x + width / 2), int(y + height / 2))
+    pt2_1 = (int(x + width / 2), int(y - height / 2))
+    pt3_1 = (int(x - width / 2), int(y - height / 2))
+    pt4_1 = (int(x - width / 2), int(y + height / 2))
 
-        # 循环遍历列数
-        for x in range(0, numCols):
-            # 如果我们的分数没有足够的可能性，
-            # 请忽略它
-            if scores_data[x] < _conf_threshold:
-                continue
-
-            # 计算偏移因子，因为我们生成的特征图将比输入图像小4倍
-            (offsetX, offsetY) = (x * 4.0, y * 4.0)
-
-            # 提取预测的旋转角度，然后计算正弦和余弦
-            angle = angles_data[x]
-            cos = np.cos(angle)
-            sin = np.sin(angle)
-
-            # 使用几何体体积导出边界框的宽度和高度
-            h = x_data0[x] + x_data2[x]
-            w = x_data1[x] + x_data3[x]
-
-            # 计算文本预测边界框的开始和结束（x，y）坐标
-            end_x = int(offsetX + (cos * x_data1[x]) + (sin * x_data2[x]))
-            end_y = int(offsetY - (sin * x_data1[x]) + (cos * x_data2[x]))
-            start_x = int(end_x - w)
-            start_y = int(end_y - h)
-
-            # 将边界框坐标和概率分数添加到我们各自的列表中
-            rects.append((start_x, start_y, end_x, end_y))
-            confidences.append(scores_data[x])
-            angles.append(angle)
-
-    # 返回边界框和相关置信度的元组
-    return rects, confidences, angles
-
-
-def decode_east(nnet_packet, **kwargs):
-    scores = nnet_packet.get_tensor(0)
-    geometry1 = nnet_packet.get_tensor(1)
-    geometry2 = nnet_packet.get_tensor(2)
-    bboxes, confs, angles = decode_predictions(scores, geometry1, geometry2)
-    boxes, angles = non_max_suppression(
-        np.array(bboxes), probs=confs, angles=np.array(angles)
+    t = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), x - x * np.cos(angle) + y * np.sin(angle)],
+            [np.sin(angle), np.cos(angle), y - x * np.sin(angle) - y * np.cos(angle)],
+            [0, 0, 1],
+        ]
     )
-    boxesangles = (boxes, angles)
-    return boxesangles
 
+    tmp_pt1_1 = np.array([[pt1_1[0]], [pt1_1[1]], [1]])
+    tmp_pt1_2 = np.dot(t, tmp_pt1_1)
+    pt1_2 = (int(tmp_pt1_2[0][0]), int(tmp_pt1_2[1][0]))
 
-def show_east(boxes_angles, frame, **kwargs):
-    bboxes = boxes_angles[0]
-    angles = boxes_angles[1]
-    for ((X0, Y0, X1, Y1), angle) in zip(bboxes, angles):
-        width = abs(X0 - X1)
-        height = abs(Y0 - Y1)
-        c_x = int(X0 + width * 0.5)
-        c_y = int(Y0 + height * 0.5)
+    tmp_pt2_1 = np.array([[pt2_1[0]], [pt2_1[1]], [1]])
+    tmp_pt2_2 = np.dot(t, tmp_pt2_1)
+    pt2_2 = (int(tmp_pt2_2[0][0]), int(tmp_pt2_2[1][0]))
 
-        rot_rect = ((c_x, c_y), ((X1 - X0), (Y1 - Y0)), angle * (-1))
-        points = rotated_rectangle(frame, rot_rect)
-        cv2.polylines(
-            frame,
-            [points],
-            isClosed=True,
-            color=(255, 0, 0),
-            thickness=1,
-            lineType=cv2.LINE_8,
-        )
+    tmp_pt3_1 = np.array([[pt3_1[0]], [pt3_1[1]], [1]])
+    tmp_pt3_2 = np.dot(t, tmp_pt3_1)
+    pt3_2 = (int(tmp_pt3_2[0][0]), int(tmp_pt3_2[1][0]))
 
-    return frame
+    tmp_pt4_1 = np.array([[pt4_1[0]], [pt4_1[1]], [1]])
+    tmp_pt4_2 = np.dot(t, tmp_pt4_1)
+    pt4_2 = (int(tmp_pt4_2[0][0]), int(tmp_pt4_2[1][0]))
+
+    points = np.array([pt1_2, pt2_2, pt3_2, pt4_2])
+
+    return points
 
 
 def order_points(pts):
@@ -462,25 +604,31 @@ def four_point_transform(image, pts):
     rect = order_points(pts)
     (tl, tr, br, bl) = rect
 
-    width_a = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-    width_b = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-    max_width = max(int(width_a), int(width_b))
+    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+    maxWidth = max(int(widthA), int(widthB))
 
-    height_a = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-    height_b = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-    max_height = max(int(height_a), int(height_b))
+    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+    maxHeight = max(int(heightA), int(heightB))
 
     dst = np.array(
-        [
-            [0, 0],
-            [max_width - 1, 0],
-            [max_width - 1, max_height - 1],
-            [0, max_height - 1],
-        ],
+        [[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]],
         dtype="float32",
     )
 
-    mat = cv2.getPerspectiveTransform(rect, dst)
-    warped = cv2.warpPerspective(image, mat, (max_width, max_height))
+    M = cv2.getPerspectiveTransform(rect, dst)
+    warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
     return warped
+
+
+def show_seg(output_colors, frame):
+    """
+    语义分割指的是把图像中的每个像素都划分到某一个类别上
+
+    :param output_colors: 语义分割颜色图
+    :param frame: 原图
+    """
+
+    return cv2.addWeighted(frame, 1, output_colors, 0.2, 0)
