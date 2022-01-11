@@ -78,11 +78,8 @@ while True:
         # I = I[y : y + h, x : x + w]
         I = cv2.resize(I, (128, 128))
 
-        frame_ac = dai.ImgFrame()
-        frame_ac.setTimestamp(time.monotonic())
-        frame_ac.setWidth(128)
-        frame_ac.setHeight(128)
-        frame_ac.setData(I)
+        frame_ac = dai.NNData()
+        frame_ac.setLayer("input", I.ravel())
         pose.q_ac_in.send(frame_ac)
         crown_proportion = w / h
         # Get result from device

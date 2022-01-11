@@ -24,6 +24,7 @@ class Main(DepthAI):
             first=True,
         )
         # https://github.com/sbdcv/sbd_mask/tree/master/model
+        # https://github.com/sbdcv/sbd_mask/blob/8e25fbd550339857f6466016d3ed0866e759ab47/deploy.py#L11-L12
         self.create_nn(
             blobconverter.from_onnx(
                 (Path(__file__).parent / Path("models/sbd_mask.onnx")).as_posix(),
