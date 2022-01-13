@@ -161,31 +161,6 @@ def restore_point(point, scale, top, left):
 
     return (np.array(point).reshape(-1, 2) - (left, top)) * scale
 
-def to_planar(arr: np.ndarray, shape: tuple) -> list:
-    img = resize_padding(arr, shape[0], shape[1])
-
-def to_planar(arr: np.ndarray, shape: tuple):
-    img, scale, top, left = resize_padding(arr, shape[0], shape[1])
-
-    return (
-        [
-            val
-            for channel in img.transpose(2, 0, 1)
-            for y_col in channel
-            for val in y_col
-        ],
-        scale,
-        top,
-        left,
-    )
-
-    # return [
-    #     val
-    #     for channel in cv2.resize(arr, shape).transpose(2, 0, 1)
-    #     for y_col in channel
-    #     for val in y_col
-    # ]
-
 
 def to_nn_result(nn_data):
     """
@@ -194,31 +169,6 @@ def to_nn_result(nn_data):
     """
     return np.array(nn_data.getFirstLayerFp16())
 
-
-def to_tensor_result(packet):
-    """
-
-    :param packet: 数据包
-    :return: 以字典形式 返回 网络层
-    """
-    return {
-        name: np.array(packet.getLayerFp16(name))
-        for name in [tensor.name for tensor in packet.getRaw().tensors]
-    }
-
-
-# @timer
-def to_bbox_result(nn_data):
-    """
-
-    :param nn_data:
-    :return:
-    """
-    arr = to_nn_result(nn_data)
-    if np.argwhere(arr == -1).size > 0:
-        arr = arr[: np.argwhere(arr == -1)[0][0]]
-    arr = arr.reshape((arr.size // 7, 7))
-    return arr
 
 
 def scale_bboxes(bboxes, scale=True, scale_size=1.5):
@@ -257,28 +207,6 @@ def run_nn(x_in, x_out, in_dict):
     # if not has_results:
     #     raise RuntimeError("No data from nn!")
     return x_out.tryGet()
-
-
-def frame_norm(frame, *xy_vals):
-    """
-    nn data, being the bounding box locations, are in <0..1> range -
-    they need to be normalized with frame width/height
-
-    :param frame: (h, w) or frame
-    :param xy_vals: the bounding box locations
-    :return:
-    """
-    if isinstance(frame, np.ndarray):
-        return (
-            np.clip(np.array(xy_vals), 0, 1)
-            * np.array(frame.shape[:2] * (len(xy_vals) // 2))[::-1]
-        ).astype(int)
-    else:
-
-        return (
-            np.clip(np.array(xy_vals), 0, 1)
-            * np.array(frame * (len(xy_vals) // 2))[::-1]
-        ).astype(int)
 
 
 def draw_3d_axis(image, head_pose, origin, size=50):

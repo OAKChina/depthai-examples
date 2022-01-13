@@ -7,7 +7,7 @@ import blobconverter
 import cv2
 import depthai as dai
 import numpy as np
-from depthai_sdk import FPSHandler
+from depthai_sdk import FPSHandler, toTensorResult
 
 from demo_utils import multiclass_nms, demo_postprocess
 from label_classes import COCO_CLASSES
@@ -95,26 +95,6 @@ nnPath = blobconverter.from_onnx(
 )
 
 
-def to_tensor_result(packet):
-    data = {}
-    for tensor in packet.getRaw().tensors:
-        if tensor.dataType == dai.TensorInfo.DataType.INT:
-            data[tensor.name] = np.array(packet.getLayerInt32(tensor.name)).reshape(
-                tensor.dims  # [::-1]
-            )
-        elif tensor.dataType == dai.TensorInfo.DataType.FP16:
-            data[tensor.name] = np.array(packet.getLayerFp16(tensor.name)).reshape(
-                tensor.dims  # [::-1]
-            )
-        elif tensor.dataType == dai.TensorInfo.DataType.I8:
-            data[tensor.name] = np.array(packet.getLayerUInt8(tensor.name)).reshape(
-                tensor.dims  # [::-1]
-            )
-        else:
-            print("Unsupported tensor layer type: {}".format(tensor.dataType))
-    return data
-
-
 def to_planar(arr: np.ndarray, input_size: tuple = None) -> np.ndarray:
     if input_size is None or tuple(arr.shape[:2]) == input_size:
         return arr.transpose((2, 0, 1))
@@ -140,12 +120,6 @@ def to_planar(arr: np.ndarray, input_size: tuple = None) -> np.ndarray:
     image = padded_img.transpose(2, 0, 1)
     return image
 
-
-def frame_norm(frame, bbox):
-    return (
-        np.clip(np.array(bbox), 0, 1)
-        * np.array([*frame.shape[:2], *frame.shape[:2]])[::-1]
-    ).astype(int)
 
 
 def print_results(result, data=False):
@@ -176,7 +150,6 @@ def create_pipeline():
         cam.setPreviewSize(*args.input_shape[::-1])
         cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
         cam.setInterleaved(False)
-        cam.setFps(60)
         cam.setBoardSocket(dai.CameraBoardSocket.RGB)
         cam_xout = pipeline.createXLinkOut()
         cam_xout.setStreamName("cam_out")
@@ -281,7 +254,7 @@ with dai.Device(create_pipeline()) as device:
         else:
             yolox_det_data = yolox_det_nn.tryGet()
         if yolox_det_data is not None:
-            res = to_tensor_result(yolox_det_data).get("output")
+            res = toTensorResult(yolox_det_data).get("output")
             fps_handler.tick("nn")
             predictions = demo_postprocess(res, (320, 320), p6=False)[0]
 

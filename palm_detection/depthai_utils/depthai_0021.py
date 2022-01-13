@@ -1,8 +1,9 @@
 # coding=utf-8
 from pathlib import Path
 
+from depthai_sdk import FPSHandler
+
 from .utils import *
-from imutils.video import FPS
 
 
 class DepthAI:
@@ -16,7 +17,7 @@ class DepthAI:
         self.file = file
         self.camera = camera
         # self.cam_size()
-        self.fps = FPS()
+        self.fps_handler = FPSHandler()
         self.create_pipeline()
         self.start_pipeline()
         self.fontScale = 1 if self.camera else 2
@@ -152,11 +153,10 @@ class DepthAI:
                     self.debug_frame, (int(256), int(256 / aspect_ratio))
                 ),
             )
-            self.fps.update()
+            self.fps_handler.tick("Frame")
             if cv2.waitKey(1) == ord("q"):
                 cv2.destroyAllWindows()
-                self.fps.stop()
-                print(f"FPS: {self.fps.fps():.2f}")
+                self.fps_handler.printStatus()
                 raise StopIteration()
 
     def parse_fun(self):
@@ -219,7 +219,6 @@ class DepthAI:
         self._cam_size = v
 
     def run(self):
-        self.fps.start()
         if self.file is not None:
             self.run_video()
         else:

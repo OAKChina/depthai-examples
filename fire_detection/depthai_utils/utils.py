@@ -160,60 +160,12 @@ def restore_point(point, scale, top, left):
     return (np.array(point).reshape(-1, 2) - (left, top)) * scale
 
 
-def to_planar(arr: np.ndarray, shape: tuple):
-    """
-
-    :param arr: cv2所读取的图像
-    :param shape: (h, w)
-    :return:
-    """
-
-    return cv2.resize(arr, shape).transpose((2, 0, 1)).flatten()
-    # return [
-    #     val
-    #     for channel in cv2.resize(arr, shape).transpose(2, 0, 1)
-    #     for y_col in channel
-    #     for val in y_col
-    # ]
-
-
 def to_nn_result(nn_data):
     """
     :param nn_data: 神经网络数据
     :return: 以 np 数组 形式返回 第一层网络
     """
     return np.array(nn_data.getFirstLayerFp16())
-
-
-def to_tensor_result(packet):
-    """
-
-    :param packet: 数据包
-    :return: 以字典形式 返回 网络层
-    """
-    return {
-        name: np.array(packet.getLayerFp16(name))
-        for name in [tensor.name for tensor in packet.getRaw().tensors]
-    }
-    # return {
-    #     tensor.name: np.array(packet.getLayerFp16(tensor.name)).reshape(tensor.dims)
-    #     for tensor in packet.getRaw().tensors
-    # }
-
-
-# @timer
-def to_bbox_result(nn_data):
-    """
-
-    :param nn_data:
-    :return:
-    """
-    arr = to_nn_result(nn_data)
-    if np.argwhere(arr == -1).size > 0:
-        arr = arr[: np.argwhere(arr == -1)[0][0]]
-    arr = arr.reshape((arr.size // 7, 7))
-    return arr
-
 
 def distance(pt1, pt2):
     """

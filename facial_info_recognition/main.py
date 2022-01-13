@@ -2,6 +2,7 @@
 from queue import Queue
 
 import blobconverter
+from depthai_sdk import toPlanar, frameNorm, toTensorResult
 
 from depthai_utils import *
 
@@ -17,7 +18,7 @@ class Main(DepthAI):
         self.emo_frame = Queue()
 
     def create_nns(self):
-        self.create_nn(blobconverter.from_zoo("face-detection-retail-0004", shaves=shaves),
+        self.create_mobilenet_nn(blobconverter.from_zoo("face-detection-retail-0004", shaves=shaves),
                        "face")
         self.create_nn(blobconverter.from_zoo("age-gender-recognition-retail-0013", shaves=shaves),
                        "ag")
@@ -33,7 +34,7 @@ class Main(DepthAI):
         self.emo_nn = self.device.getOutputQueue("emo_nn")
 
     def run_face(self):
-        data, scale, top, left = to_planar(self.frame, (300, 300))
+        data = toPlanar(self.frame, (300, 300))
         nn_data = run_nn(
             self.face_in,
             self.face_nn,
@@ -42,18 +43,19 @@ class Main(DepthAI):
 
         if nn_data is None:
             return False
+        self.fps_handler.tick("face-detection")
 
-        results = to_bbox_result(nn_data)
+        results = nn_data.detections
 
         self.face_coords = [
-            frame_norm((300, 300), *obj[3:7]) for obj in results if obj[2] > 0.8
+            frameNorm(self.debug_frame, [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]) for bbox in results
         ]
 
         self.face_num = len(self.face_coords)
         if self.face_num == 0:
             return False
 
-        self.face_coords = restore_point(self.face_coords, scale, top, left).astype(int)
+        # self.face_coords = restore_point(self.face_coords, scale, top, left).astype(int)
 
         self.face_coords = scale_bboxes(self.face_coords, scale=True, scale_size=1.5)
 
@@ -75,12 +77,13 @@ class Main(DepthAI):
             nn_data = run_nn(
                 self.ag_in,
                 self.ag_nn,
-                {"data": to_planar(age_frame, (62, 62))[0]},
+                {"data": toPlanar(age_frame, (62, 62))},
             )
             if nn_data is None:
                 return
-            results = to_tensor_result(nn_data)
-            age = results["age_conv3"][0] * 100
+            results = toTensorResult(nn_data)
+            self.fps_handler.tick("age-gender-recognition")
+            age = np.squeeze(results["age_conv3"]) * 100
             gender = "Male" if results["prob"].argmax() else "Female"
 
             # print(results)
@@ -103,11 +106,12 @@ class Main(DepthAI):
             nn_data = run_nn(
                 self.emo_in,
                 self.emo_nn,
-                {"prob": to_planar(emo_frame, (64, 64))[0]},
+                {"prob": toPlanar(emo_frame, (64, 64))},
             )
             if nn_data is None:
                 return
             out = to_nn_result(nn_data)
+            self.fps_handler.tick("emotions-recognition")
             # print(out)
             emo_r = emo[out.argmax()]
 

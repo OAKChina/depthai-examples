@@ -1,201 +1,281 @@
 # coding=utf-8
-from queue import Queue
+import queue
+from pathlib import Path
 
 import blobconverter
+import cv2
+import depthai as dai
+import numpy as np
+from depthai_sdk import getDeviceInfo, FPSHandler, toTensorResult, toPlanar
+from loguru import logger
 
-from depthai_utils import *
+blobconverter.set_defaults(
+    output_dir=Path(__file__).parent / Path("models"), optimizer_params=None
+)
 
-blobconverter.set_defaults(output_dir=Path(__file__).parent / Path("models"))
+preview_size = (1080, 1080)
 
 
-class Main(DepthAI):
-    def __init__(self, file=None, camera=False):
-        self.cam_size = (300, 300)
-        super().__init__(file, camera)
-        self.face_coords = Queue()
-        self.face_frame = Queue()
-        self.left_eye_blink = []
-        self.number_of_blinks_of_left_eye = 0
-        self.right_eye_blink = []
-        self.number_of_blinks_of_right_eye = 0
+def create_pipeline():
+    pipeline = dai.Pipeline()
+    # pipeline.setOpenVINOVersion(dai.OpenVINO.VERSION_2021_4)
 
-    def create_nns(self):
-        self.create_mobilenet_nn(
-            blobconverter.from_zoo("face-detection-retail-0004", shaves=6),
-            "face",
-            conf=0.8,
-            first=True,
+    cam = pipeline.create(dai.node.ColorCamera)
+    cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+    cam.setBoardSocket(dai.CameraBoardSocket.RGB)
+    cam.setInterleaved(False)
+    # cam.setPreviewSize(300, 300)
+    cam.setPreviewSize(preview_size)
+
+    cam_out = pipeline.create(dai.node.XLinkOut)
+    cam_out.setStreamName("rgb")
+    cam.preview.link(cam_out.input)
+
+    mesh = pipeline.create(dai.node.NeuralNetwork)
+    mesh.setBlobPath(
+        "models/face_landmark_openvino_2021.4_6shave.blob"
+    )
+    mesh.setNumInferenceThreads(2)
+    mesh.input.setBlocking(False)
+    mesh.input.setQueueSize(2)
+
+    manip = pipeline.create(dai.node.ImageManip)
+    manip.initialConfig.setResize(192, 192)
+    cam.preview.link(manip.inputImage)
+    manip.out.link(mesh.input)
+    # cam.preview.link(face_det.input)
+
+    # mesh_in = pipeline.create(dai.node.XLinkIn)
+    # mesh_in.setStreamName("mesh_in")
+    # mesh_in.setMaxDataSize(192 * 192 * 3)
+    # mesh_in.out.link(mesh.input)
+
+    mesh_out = pipeline.create(dai.node.XLinkOut)
+    mesh_out.setStreamName("mesh_nn")
+    mesh.out.link(mesh_out.input)
+
+    eye = pipeline.create(dai.node.NeuralNetwork)
+    eye.setBlobPath(
+        blobconverter.from_zoo(
+            "open-closed-eye-0001",
+            shaves=6,
+            # version=pipeline.getOpenVINOVersion()
         )
-        # https://github.com/PINTO0309/PINTO_model_zoo/tree/main/032_FaceMesh
-        self.create_nn(
-            # blobconverter.from_onnx(
-            #     "models/face_mesh_192x192.onnx",
-            #     optimizer_params=[
-            #         "--mean_values=[127.5,127.5,127.5]",
-            #         "--scale_values=[127.5,127.5,127.5]",
-            #     ],
-            #     shaves=6,
-            # ),
-            blobconverter.from_openvino(
-                "models/face_mesh_192x192.xml",
-                "models/face_mesh_192x192.bin",
-                shaves=6,
-            ),
-            "mesh",
-        )
-        self.create_nn(blobconverter.from_zoo("open-closed-eye-0001", shaves=6), "eye")
+    )
+    eye.setNumInferenceThreads(2)
+    eye.input.setBlocking(False)
+    eye.input.setQueueSize(2)
 
-    def start_nns(self):
-        if not self.camera:
-            self.face_in = self.device.getInputQueue("face_in")
-        self.face_nn = self.device.getOutputQueue("face_nn", maxSize=4, blocking=False)
-        self.mesh_in = self.device.getInputQueue("mesh_in", maxSize=4, blocking=False)
-        self.mesh_nn = self.device.getOutputQueue("mesh_nn", maxSize=4, blocking=False)
-        self.eye_in = self.device.getInputQueue("eye_in", maxSize=4, blocking=False)
-        self.eye_nn = self.device.getOutputQueue("eye_nn", maxSize=4, blocking=False)
+    eye_in = pipeline.create(dai.node.XLinkIn)
+    eye_in.setStreamName("eye_in")
+    eye_in.setMaxDataSize(32 * 32 * 3)
+    eye_in.out.link(eye.input)
 
-    def run_face(self):
-        if not self.camera:
-            nn_data = run_nn(
-                self.face_in,
-                self.face_nn,
-                {"data": to_planar(self.frame, (300, 300))},
-            )
-        else:
-            nn_data = self.face_nn.tryGet()
-        if nn_data is None:
-            return False
-        self.fps_nn.update()
+    eye_out = pipeline.create(dai.node.XLinkOut)
+    eye_out.setStreamName("eye_nn")
+    eye.out.link(eye_out.input)
+    return pipeline
 
-        bboxes = nn_data.detections
-        for bbox in bboxes:
-            face_coord = frame_norm(
-                (300, 300), *[bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
-            )
-            self.face_frame.put(
-                self.frame[face_coord[1] : face_coord[3], face_coord[0] : face_coord[2]]
-            )
 
-            self.face_coords.put(face_coord)
-            self.draw_bbox(face_coord, (10, 245, 10))
-        return True
+def blink():
+    device_info = getDeviceInfo()  # type: dai.DeviceInfo
+    with dai.Device(create_pipeline(), device_info) as device:
+        fps_handler = FPSHandler()
+        cam_out = device.getOutputQueue("rgb")
+        # face_nn = device.getOutputQueue("face_nn")
 
-    def run_mesh(self):
-        for i in range(self.face_frame.qsize()):
-            frame = self.face_frame.get()
-            nn_data = run_nn(
-                self.mesh_in,
-                self.mesh_nn,
-                {"data": to_planar(frame, (192, 192))},
-            )
+        # mesh_in = device.getInputQueue("mesh_in")
+        mesh_nn = device.getOutputQueue("mesh_nn")
 
-            if nn_data is None:
-                return
+        eye_in = device.getInputQueue("eye_in")
+        eye_nn = device.getOutputQueue("eye_nn")
+        left_eye_blink = []
+        right_eye_blink = []
 
-            results = to_tensor_result(nn_data)
-            detections = results.get("conv2d_20").reshape(-1, 3)
-            detections[..., 0] /= 192
-            detections[..., 1] /= 192
-            detections = [frame_norm(frame, *obj[:2]) for obj in detections]
+        left_number_of_blinks = 0
+        right_number_of_blinks = 0
+        while 1:
+            frame = cam_out.get().getCvFrame()
+            frame_debug = frame.copy()
 
-            left_eye = np.array(
-                (
-                    detections[71],
-                    detections[107],
-                    detections[116],
-                    detections[197],
+            # run_nn(frame_debug, mesh_in, 192, 192)
+            mesh_data = toTensorResult(mesh_nn.get())
+            fps_handler.tick("Mesh")
+
+            score = mesh_data.get("conv2d_31").reshape((1,))
+            if score > 0.5:
+                mesh = mesh_data.get("conv2d_21").reshape((468, 3))
+
+                wh = np.array(frame_debug.shape[:2])[::-1]
+                mesh *= np.array([*wh / 192, 1])
+
+                for v in mesh.astype(int):
+                    cv2.circle(frame_debug, v[:2], 1, (191, 255, 0))
+
+                left_eye, left_box = get_mini_box_frame(
+                    frame_debug,
+                    np.array([mesh[71], mesh[107], mesh[116], mesh[197]]),
                 )
-            )
-            right_eye = np.array(
-                (
-                    detections[301],
-                    detections[336],
-                    detections[345],
-                    detections[197],
+
+
+                run_nn(left_eye, eye_in, 32, 32)
+                left_eye_blink.append(
+                    np.argmax(toTensorResult(eye_nn.get()).get("19"))
                 )
-            )
-            (
-                self.left_eye_blink,
-                self.number_of_blinks_of_left_eye,
-            ) = self.frame_eyes(frame, left_eye, "l")
-            (
-                self.right_eye_blink,
-                self.number_of_blinks_of_right_eye,
-            ) = self.frame_eyes(frame, right_eye, "r")
 
-            #
-            # # count=0
-            # for dot in detections:
-            #     dot += self.face_coords[i][:2]
-            #     self.draw_dot(dot, (255, 0, 255))
-            #     # self.put_text(f"{count}",dot,font_scale=0.5,line_type=1)
-            #     # count += 1
+                if (
+                        len(left_eye_blink) > 5
+                        and left_eye_blink[-1] not in left_eye_blink[-5:-1]
+                ):
+                    left_number_of_blinks += 1
 
-    def frame_eyes(self, face_frame, eye_array, mark: str):
-        eye_blink = self.right_eye_blink if mark == "r" else self.left_eye_blink
-        number_of_blinks_of_eye = (
-            self.number_of_blinks_of_right_eye
-            if mark == "r"
-            else self.number_of_blinks_of_left_eye
-        )
-        n = "right" if mark == "r" else "left"
+                if len(left_eye_blink) > 20:
+                    del left_eye_blink[0]
 
-        rect = cv2.minAreaRect(eye_array)
-        box = cv2.boxPoints(rect)
-        eye = np.append(np.min(box, axis=0), np.max(box, axis=0)).astype(int)
-        eye = np.where(eye > 0, eye, 0)
-        self.eye_img = face_frame[eye[1] : eye[3], eye[0] : eye[2]]
-        cv2.imshow(n, self.eye_img)
-        closed = self.run_eye()
-        if closed is not None:
-            eye_blink.append(closed)
-            if len(eye_blink) > 20:
-                eye_blink.pop(0)
-            if eye_blink[-5:-1].count(closed) == 0 and len(eye_blink) > 5:
-                self.put_text("Blink", (20, 30))
-                number_of_blinks_of_eye += 1
-        return eye_blink, number_of_blinks_of_eye
+                right_eye, right_box = get_mini_box_frame(
+                    frame_debug,
+                    np.array([mesh[301], mesh[336], mesh[345], mesh[197]]),
+                )
 
-    def run_eye(self):
+                run_nn(right_eye, eye_in, 32, 32)
+                right_eye_blink.append(
+                    np.argmax(toTensorResult(eye_nn.get()).get("19"))
+                )
+                if (
+                        len(right_eye_blink) > 5
+                        and right_eye_blink[-1] not in right_eye_blink[-5:-1]
+                ):
+                    right_number_of_blinks += 1
 
-        nn_data = run_nn(
-            self.eye_in,
-            self.eye_nn,
-            {"input.1": to_planar(self.eye_img, (32, 32))},
-        )
+                if len(right_eye_blink) > 20:
+                    del right_eye_blink[0]
 
-        if nn_data is None:
-            return
-        out = to_nn_result(nn_data)
-        if np.max(out) < 0.5:
-            return
-        res = np.argmax(out)
-        return res
+                cv2.drawContours(frame_debug, [np.int0(right_box)], -1, (0, 139, 0), 2)
+                cv2.drawContours(frame_debug, [np.int0(left_box)], -1, (0, 139, 0), 2)
+                cv2.imshow("left", left_eye)
+                cv2.imshow("right", right_eye)
 
-    def parse_fun(self):
-        try:
-            if self.run_face():
-                self.run_mesh()
-        except Exception as e:
-            print(e)
-            pass
-        finally:
-            self.put_text(
-                f"NumberOfBlinksOfRightEye:{self.number_of_blinks_of_right_eye}",
+
+
+            cv2.putText(
+                frame_debug,
+                f"NumberOfBlinksOfRightEye:{right_number_of_blinks}",
                 (20, 50),
-                font_scale=0.5,
-                line_type=1,
+                fontFace=cv2.FONT_HERSHEY_COMPLEX,
+                fontScale=0.5,
+                color=(34, 34, 178),
+                lineType=1,
             )
-            self.put_text(
-                f"NumberOfBlinksOfLeftEye:{self.number_of_blinks_of_left_eye}",
+            cv2.putText(
+                frame_debug,
+                f"NumberOfBlinksOfLeftEye:{left_number_of_blinks}",
                 (20, 80),
-                font_scale=0.5,
-                line_type=1,
+                fontFace=cv2.FONT_HERSHEY_COMPLEX,
+                fontScale=0.5,
+                color=(34, 34, 178),
+                lineType=1,
             )
+
+            cv2.imshow("", frame_debug)
+            key = cv2.waitKey(1)
+            if key == ord("q"):
+                break
+            fps_handler.printStatus()
+
+
+def run_nn(img, input_queue, width, height):
+    frameNn = dai.ImgFrame()
+    frameNn.setType(dai.ImgFrame.Type.BGR888p)
+    frameNn.setWidth(width)
+    frameNn.setHeight(height)
+    frameNn.setData(toPlanar(img, (height, width)))
+    input_queue.send(frameNn)
+
+
+def scale_bbox(bboxes, scale_size=1.5):
+    box = np.zeros_like(bboxes)
+    scale_size = np.sqrt(scale_size)
+
+    xy = ((bboxes[2:] + bboxes[:2]) / 2,)
+    wh = (bboxes[2:] - bboxes[:2]) / 2
+    box[:2] = xy - wh * scale_size
+    box[2:] = xy + wh * scale_size
+    return np.clip(box, 0, None)
+
+
+def order_points(pts):
+    """
+    https://www.pyimagesearch.com//2016/03/21/ordering-coordinates-clockwise-with-python-and-opencv/
+    """
+
+    # sort the points based on their x-coordinates
+    xSorted = pts[np.argsort(pts[:, 0]), :]
+
+    leftMost = xSorted[:2, :]
+    rightMost = xSorted[2:, :]
+
+    (tl, bl) = leftMost[np.argsort(leftMost[:, 1]), :]
+    (tr, br) = rightMost[np.argsort(rightMost[:, 1]), :]
+
+    # return the coordinates in
+    # top-left, top-right, bottom-right, and bottom-left order
+    return np.array([tl, tr, br, bl], dtype="float32")
+
+
+def get_mini_box_frame(img, contour):
+    """
+    https://www.jianshu.com/p/90572b07e48f
+    """
+
+    # 得到最小外接矩形的（中心(x,y), (宽,高), 旋转角度）
+    center, size, angle = cv2.minAreaRect((contour[:, :2]).astype(int))
+
+    box = cv2.boxPoints([center, size, angle])
+    # 返回四个点顺序：左上→右上→右下→左下
+    box = order_points(box)
+
+    center, size = tuple(map(int, center)), tuple(map(int, size))
+
+    affine = False
+    if affine:
+        """
+        仿射变换
+        第一种裁剪旋转矩形的方法是通过仿射变换旋转图像的方式。"""
+
+        height, width = img.shape[:2]
+
+        M = cv2.getRotationMatrix2D(center, angle, 1)
+        img_rot = cv2.warpAffine(img, M, (width, height))
+        cv2.imshow("img_rot", img_rot)
+        img_crop = cv2.getRectSubPix(
+            img_rot, size, center
+        )
+        return img_crop, np.int0(box)
+
+    else:
+        """
+        透视变换
+        第二种裁剪旋转矩形的方法是通过透视变换直接将旋转矩形的四个顶点映射到正矩形的四个顶点。
+        """
+        w, h = size
+        if w < h:
+            w, h = h, w
+
+        # specifying points
+        # in the top-left, top-right, bottom-right, and bottom-left
+        # order
+        dst = np.array([
+            [0, 0],
+            [w - 1, 0],
+            [w - 1, h - 1],
+            [0, h - 1]], dtype="float32")
+
+        # compute the perspective transform matrix and then apply it
+        M = cv2.getPerspectiveTransform(box, dst)
+        warped = cv2.warpPerspective(img, M, (w, h))
+        return warped, np.int0(box)
 
 
 if __name__ == "__main__":
-    if args.video:
-        Main(file=args.video).run()
-    else:
-        Main(camera=args.camera).run()
+    with logger.catch():
+        blink()

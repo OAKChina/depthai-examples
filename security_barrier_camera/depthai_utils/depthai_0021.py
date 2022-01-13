@@ -1,6 +1,7 @@
+# coding=utf-8
 from pathlib import Path
 
-from imutils.video import FPS
+from depthai_sdk import FPSHandler
 
 from .utils import *
 
@@ -14,8 +15,7 @@ class DepthAI:
         print("Loading pipeline...")
         self.file = file
         self.camera = camera
-        self.fps_cam = FPS()
-        self.fps_nn = FPS()
+        self.fps_handler = FPSHandler()
         self.create_pipeline()
         self.start_pipeline()
         self.fontScale = 1 if self.camera else 2
@@ -96,7 +96,6 @@ class DepthAI:
 
         if first and self.camera:
             self.cam.preview.link(model_nn.input)
-            model_nn.passthrough.link(self.cam_xout.input)
         else:
             model_in = self.pipeline.createXLinkIn()
             model_in.setStreamName(f"{model_name}_in")
@@ -152,14 +151,10 @@ class DepthAI:
                 "Camera_view",
                 self.debug_frame,
             )
-            self.fps_cam.update()
+            self.fps_handler.tick("Frame")
             if cv2.waitKey(1) == ord("q"):
                 cv2.destroyAllWindows()
-                self.fps_cam.stop()
-                self.fps_nn.stop()
-                print(
-                    f"FPS_CAMERA: {self.fps_cam.fps():.2f} , FPS_NN: {self.fps_nn.fps():.2f}"
-                )
+                self.fps_handler.printStatus()
                 raise StopIteration()
 
     def parse_fun(self):
@@ -198,8 +193,6 @@ class DepthAI:
         self._cam_size = v
 
     def run(self):
-        self.fps_cam.start()
-        self.fps_nn.start()
         if self.file is not None:
             self.run_video()
         else:

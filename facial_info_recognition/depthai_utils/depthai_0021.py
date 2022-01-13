@@ -1,8 +1,6 @@
 # coding=utf-8
 from pathlib import Path
-
-from imutils.video import FPS
-
+from depthai_sdk import FPSHandler
 from .utils import *
 
 
@@ -17,7 +15,7 @@ class DepthAI:
         self.file = file
         self.camera = camera
         # self.cam_size()
-        self.fps = FPS()
+        self.fps_handler = FPSHandler()
         self.create_pipeline()
         self.start_pipeline()
         self.fontScale = 1 if self.camera else 2
@@ -71,6 +69,41 @@ class DepthAI:
 
         if first and self.camera:
             self.cam.preview.link(model_nn.input)
+        else:
+            model_in = self.pipeline.createXLinkIn()
+            model_in.setStreamName(f"{model_name}_in")
+            model_in.out.link(model_nn.input)
+
+        model_nn_xout = self.pipeline.createXLinkOut()
+        model_nn_xout.setStreamName(f"{model_name}_nn")
+        model_nn.out.link(model_nn_xout.input)
+
+    def create_mobilenet_nn(
+        self,
+        model_path: str,
+        model_name: str,
+        conf: float = 0.5,
+        first: bool = False,
+    ):
+        """
+
+        :param model_path: 模型名称
+        :param model_name: 模型简称
+        :param conf: 置信度阈值
+        :param first: 是否为首个模型
+        :return:
+        """
+        # NeuralNetwork
+        print(f"Creating {Path(model_path).stem} Neural Network...")
+        model_nn = self.pipeline.createMobileNetDetectionNetwork()
+        model_nn.setBlobPath(str(Path(model_path).resolve().absolute()))
+        model_nn.setConfidenceThreshold(conf)
+        model_nn.input.setBlocking(False)
+
+        if first and self.camera:
+            self.cam.preview.link(model_nn.input)
+            if not self.HD:
+                model_nn.passthrough.link(self.cam_xout.input)
         else:
             model_in = self.pipeline.createXLinkIn()
             model_in.setStreamName(f"{model_name}_in")
@@ -153,11 +186,10 @@ class DepthAI:
                 #     self.debug_frame, (int(900), int(900 / aspect_ratio))
                 # ),
             )
-            self.fps.update()
+            self.fps_handler.tick("Frame")
             if cv2.waitKey(1) == ord("q"):
                 cv2.destroyAllWindows()
-                self.fps.stop()
-                print(f"FPS: {self.fps.fps():.2f}")
+                self.fps_handler.printStatus()
                 raise StopIteration()
 
     def parse_fun(self):
@@ -220,7 +252,6 @@ class DepthAI:
         self._cam_size = v
 
     def run(self):
-        self.fps.start()
         if self.file is not None:
             self.run_video()
         else:

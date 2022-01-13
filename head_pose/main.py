@@ -1,3 +1,4 @@
+# coding=utf-8
 import argparse
 import queue
 import threading
@@ -6,7 +7,7 @@ from pathlib import Path
 
 import blobconverter
 import depthai
-from imutils.video import FPS
+from depthai_sdk import FPSHandler
 
 from tools import *
 
@@ -160,8 +161,7 @@ class Main:
         self.start_pipeline()
         if not camera:
             self.cap = cv2.VideoCapture(str(Path(args.video).resolve().absolute()))
-        self.fps = FPS()
-        self.fps.start()
+        self.fps_handler = FPSHandler()
         self.frame = None
         self.face_box_q = queue.Queue()
         self.bboxes = []
@@ -254,7 +254,7 @@ class Main:
             read_correctly, new_frame = self.get_frame()
             if not read_correctly:
                 break
-            self.fps.update()
+            self.fps_handler.tick("Frame")
             self.frame = new_frame
             self.debug_frame = self.frame.copy()
             if not camera:
@@ -442,8 +442,7 @@ class Main:
                     cv2.destroyAllWindows()
                     break
 
-        self.fps.stop()
-        print("FPS：{:.2f}".format(self.fps.fps()))
+        self.fps_handler.printStatus()
         if not camera:
             self.cap.release()
         cv2.destroyAllWindows()

@@ -1,3 +1,4 @@
+# coding=utf-8
 import argparse
 import time
 from pathlib import Path
@@ -7,7 +8,7 @@ import blobconverter
 import cv2
 import depthai as dai
 import numpy as np
-from depthai_sdk import FPSHandler
+from depthai_sdk import FPSHandler, toTensorResult
 
 from demo_utils import multiclass_nms, demo_postprocess
 from visualize import vis
@@ -95,26 +96,6 @@ nnPath = blobconverter.from_onnx(
     ],
     shaves=shaves,
 )
-
-def to_tensor_result(packet):
-    data = {}
-    for tensor in packet.getRaw().tensors:
-        if tensor.dataType == dai.TensorInfo.DataType.INT:
-            data[tensor.name] = np.array(packet.getLayerInt32(tensor.name)).reshape(
-                tensor.dims  # [::-1]
-            )
-        elif tensor.dataType == dai.TensorInfo.DataType.FP16:
-            data[tensor.name] = np.array(packet.getLayerFp16(tensor.name)).reshape(
-                tensor.dims  # [::-1]
-            )
-        elif tensor.dataType == dai.TensorInfo.DataType.I8:
-            data[tensor.name] = np.array(packet.getLayerUInt8(tensor.name)).reshape(
-                tensor.dims  # [::-1]
-            )
-        else:
-            print("Unsupported tensor layer type: {}".format(tensor.dataType))
-    return data
-
 
 def to_planar(arr: np.ndarray, input_size: tuple = None) -> np.ndarray:
     if input_size is None or tuple(arr.shape[:2]) == input_size:
@@ -283,7 +264,7 @@ with dai.Device(create_pipeline()) as device:
         else:
             yolox_det_data = yolox_det_nn.tryGet()
         if yolox_det_data is not None:
-            res = to_tensor_result(yolox_det_data).get("output")
+            res = toTensorResult(yolox_det_data).get("output")
             fps_handler.tick("nn")
             predictions = demo_postprocess(res, (320, 320), p6=False)[0]
 

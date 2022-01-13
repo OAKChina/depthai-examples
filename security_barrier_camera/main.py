@@ -1,6 +1,8 @@
+# coding=utf-8
 from collections import deque
 
 import blobconverter
+from depthai_sdk import toPlanar, frameNorm, toTensorResult
 
 from depthai_utils import *
 
@@ -49,56 +51,37 @@ class Vehicle(DepthAI):
     def run_vlpd(self):
         if not self.camera:
             nn_data = run_nn(
-                self.vlpd_in, self.vlpd_nn, {"data": to_planar(self.frame, (300, 300))}
+                self.vlpd_in, self.vlpd_nn, {"data": toPlanar(self.frame, (300, 300))}
             )
         else:
             nn_data = self.vlpd_nn.tryGet()
 
         if nn_data is None:
             return False, False
-
+        self.fps_handler.tick("vehicle-license-plate-detection")
         bboxes = nn_data.detections
         self.vehicle_coords.clear()
         self.lpr_coords.clear()
         for bbox in bboxes:
             if bbox.label == 1:
                 self.vehicle_coords.append(
-                    frame_norm(
-                        (300, 300), *[bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
+                    frameNorm(
+                        self.debug_frame, [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
                     )
                 )
             elif bbox.label == 2:
                 self.lpr_coords.append(
-                    frame_norm(
-                        (300, 300), *[bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
+                    frameNorm(
+                        self.debug_frame, [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
                     )
                 )
-
-        # results = to_bbox_result(nn_data)
-        #
-        # self.vehicle_coords = [
-        #     frame_norm(self.frame, *obj[3:7])
-        #     for obj in results
-        #     if obj[2] > 0.6 and obj[1] == 1
-        # ]
-        #
-        # self.lpr_coords = [
-        #     frame_norm(self.frame, *obj[3:7])
-        #     for obj in results
-        #     if obj[2] > 0.6 and obj[1] == 2
-        # ]
 
         flag_vehicle = False if len(self.vehicle_coords) == 0 else True
         flag_card = False if len(self.lpr_coords) == 0 else True
         if flag_vehicle:
-            # print("vehicle_coords",self.vehicle_coords)
-            # self.vehicle_coords = scale_bboxes(self.vehicle_coords, scale=False)
             self.vehicle_()
         if flag_card:
-            # print("lpr_coords",self.lpr_coords)
-            # self.lpr_coords = scale_bboxes(self.lpr_coords)
             self.lpr_()
-            # pass
         return flag_vehicle, flag_card
 
     def vehicle_(self):
@@ -115,26 +98,6 @@ class Vehicle(DepthAI):
                 self.draw_bbox(bbox, (10, 245, 10))
 
     def lpr_(self):
-        # self.lpr_frame = [
-        #     self.frame[
-        #     int(
-        #         (self.lpr_coords[i][3] + self.lpr_coords[i][1]) / 2
-        #         - (self.lpr_coords[i][3] - self.lpr_coords[i][1]) / 2 * 1.5
-        #     ): int(
-        #         (self.lpr_coords[i][3] + self.lpr_coords[i][1]) / 2
-        #         + (self.lpr_coords[i][3] - self.lpr_coords[i][1]) / 2 * 1.5
-        #     ),
-        #     int(
-        #         (self.lpr_coords[i][2] + self.lpr_coords[i][0]) / 2
-        #         - (self.lpr_coords[i][2] - self.lpr_coords[i][0]) / 2 * 1.5
-        #     ): int(
-        #         (self.lpr_coords[i][2] + self.lpr_coords[i][0]) / 2
-        #         + (self.lpr_coords[i][2] - self.lpr_coords[i][0]) / 2 * 1.5
-        #     ),
-        #     ]
-        #     for i in range(len(self.lpr_coords))
-        # ]
-
         self.lpr_frame = [
             self.frame[
                 self.lpr_coords[i][1] : self.lpr_coords[i][3],
@@ -154,13 +117,13 @@ class Vehicle(DepthAI):
             nn_data = run_nn(
                 self.var_in,
                 self.var_nn,
-                {"data": to_planar(self.vehicle_frame[i], (72, 72))},
+                {"data": toPlanar(self.vehicle_frame[i], (72, 72))},
             )
             if nn_data is None:
                 break
-            results = to_tensor_result(nn_data)
-            for key in results.keys():
-                results[key] = results[key][: len(results[key]) // 2]
+            results = toTensorResult(nn_data)
+            # for key in results.keys():
+            #     results[key] = results[key][: len(results[key]) // 2]
 
             color_ = colors[results["color"].argmax()]
             type_ = types[results["type"].argmax()]
@@ -266,20 +229,19 @@ class Vehicle(DepthAI):
             nn_data = run_nn(
                 self.lpr_in,
                 self.lpr_nn,
-                {"data": to_planar(self.lpr_frame[i], (94, 24))},
+                {"data": toPlanar(self.lpr_frame[i], (94, 24))},
             )
 
             if nn_data is None:
                 break
 
             lpr_str = ""
-            results = to_nn_result(nn_data)
+            results = toTensorResult(nn_data)["d_predictions.0"].squeeze()
 
             for j in results:
                 if j == -1:
                     break
                 lpr_str += items[int(j)]
-
             cv2.imshow(
                 f"CAR_CARD{i}",
                 cv2.resize(self.lpr_frame[i], (188, 48)),

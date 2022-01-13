@@ -1,9 +1,9 @@
 # coding=utf-8
+from Xlib.display import Display
+from depthai_sdk import toPlanar, toTensorResult, frameNorm
+from pynput.mouse import Controller
 
 from depthai_utils import *
-
-from Xlib.display import Display
-from pynput.mouse import Controller
 
 mouse = Controller()
 screen = Display().screen()
@@ -74,7 +74,7 @@ class Main(DepthAI):
             nn_data = run_nn(
                 self.palm_in,
                 self.palm_nn,
-                {"input": to_planar(self.frame, shape)},
+                {"input": toPlanar(self.frame, shape)},
             )
         else:
             nn_data = self.palm_nn.tryGet()
@@ -83,14 +83,10 @@ class Main(DepthAI):
             return
 
         # Run the neural network
-        results = to_tensor_result(nn_data)
+        results = toTensorResult(nn_data)
 
-        raw_box_tensor = results.get("regressors").reshape(
-            -1, 896, 18
-        )  # regress
-        raw_score_tensor = results.get("classificators").reshape(
-            -1, 896, 1
-        )  # classification
+        raw_box_tensor = results.get("regressors")  # regress
+        raw_score_tensor = results.get("classificators")  # classification
 
         detections = raw_to_detections(
             raw_box_tensor, raw_score_tensor, anchors, shape, num_keypoints
@@ -98,7 +94,7 @@ class Main(DepthAI):
         # print(detections.shape)
 
         self.palm_coords = [
-            frame_norm(self.frame, *obj[:4])
+            frameNorm(self.frame, obj[:4])
             for det in detections
             for obj in det
             if obj[-1] > min_score_thresh

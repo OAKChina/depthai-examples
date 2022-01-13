@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
-import time
 import argparse
 import math
+import time
+from pathlib import Path
 
 import cv2
 import depthai as dai
-import numpy as np
 
 from Focuser import Focuser
 from pid import PID

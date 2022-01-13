@@ -1,9 +1,4 @@
-# -i https://pypi.tuna.tsinghua.edu.cn/simple/
-opencv-python
-numpy
-scipy
-imutils
+-i https://pypi.tuna.tsinghua.edu.cn/simple/
+depthai-sdk>=1.1.6
+depthai>=2.13.0.0
 pynput
-
---extra-index-url https://artifacts.luxonis.com/artifactory/luxonis-python-snapshot-local/
-depthai==0.0.2.1+835d7147b0d6f7aef828eb5af187cfbace708e25

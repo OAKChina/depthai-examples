@@ -1,7 +1,9 @@
-import depthai
-import cv2
-import numpy as np
 import os
+
+import cv2
+import depthai
+import numpy as np
+
 
 def mkdir(name):
     path = './images/' + name

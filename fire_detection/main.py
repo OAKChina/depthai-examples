@@ -1,5 +1,7 @@
 # coding=utf-8
 import blobconverter
+from depthai_sdk import toPlanar, toTensorResult
+
 from depthai_utils import *
 
 parentDir = Path(__file__).parent
@@ -36,12 +38,12 @@ class Main(DepthAI):
         nn_data = run_nn(
             self.fire_in,
             self.fire_nn,
-            {"Placeholder": to_planar(self.frame, (224, 224))},
+            {"Placeholder": toPlanar(self.frame, (224, 224))},
         )
         if nn_data is None:
             return
-        self.fps_nn.update()
-        results = to_tensor_result(nn_data).get("final_result")
+        self.fps_handler.tick("NN")
+        results = toTensorResult(nn_data).get("final_result").squeeze()
         i = int(np.argmax(results))
         label = labels[i]
         if label == "normal":
