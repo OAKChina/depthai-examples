@@ -4,9 +4,11 @@
 
 import os
 
+import cv2
+import depthai as dai
 import numpy as np
 
-__all__ = ["mkdir", "nms", "multiclass_nms", "demo_postprocess"]
+__all__ = ["mkdir", "nms", "multiclass_nms", "demo_postprocess", "to_planar", "print_results", "run_nn"]
 
 
 def mkdir(path):
@@ -92,3 +94,45 @@ def demo_postprocess(outputs, img_size, p6=False):
     outputs[..., 2:4] = np.exp(outputs[..., 2:4]) * expanded_strides
 
     return outputs
+
+
+
+def to_planar(arr: np.ndarray, input_size: tuple = None) -> np.ndarray:
+    if input_size is None or tuple(arr.shape[:2]) == input_size:
+        return arr.transpose((2, 0, 1))
+
+    input_size = np.array(input_size)
+    if len(arr.shape) == 3:
+        padded_img = np.ones((input_size[0], input_size[1], 3)) * 114.0
+    else:
+        padded_img = np.ones(input_size) * 114.0
+    img = np.array(arr)
+    r = min(input_size / img.shape[:2])
+    resize_ = (np.array(img.shape[:2]) * r).astype(int)
+    resized_img = cv2.resize(
+        img,
+        tuple(resize_[::-1]),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    padding = (input_size - resize_) // 2
+    padded_img[
+        padding[0] : padding[0] + int(img.shape[0] * r),
+        padding[1] : padding[1] + int(img.shape[1] * r),
+    ] = resized_img
+    image = padded_img.transpose(2, 0, 1)
+    return image
+
+def print_results(result, data=False):
+    for i in result:
+        print(i, result[i].shape)
+        if data:
+            print(result[i])
+
+def run_nn(img, input_queue, width, height):
+    frameNn = dai.ImgFrame()
+    frameNn.setType(dai.ImgFrame.Type.BGR888p)
+    frameNn.setWidth(width)
+    frameNn.setHeight(height)
+    frameNn.setData(toPlanar(img, (height, width)))
+    input_queue.send(frameNn)
+
