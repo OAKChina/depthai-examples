@@ -14,13 +14,13 @@ from demo_utils import multiclass_nms, demo_postprocess, run_nn, to_planar
 from label_classes import *
 from visualize import vis
 
+# Setting the size of the preview window.
 preview_size = (1280, 720)
 
 # To use a different NN, change `size` and `nnPath` here:
 parentDir = Path(__file__).parent
 shaves = 6
 blobconverter.set_defaults(output_dir=parentDir / Path("models"))
-size = (320, 320)
 
 MODELS = {
     "yolox": (parentDir / Path("models/yolox_nano_320x320.onnx")).as_posix(),
@@ -33,22 +33,34 @@ LABELS = {
 }
 
 
-def create_pipeline(video, model_name, model_size):
+def create_pipeline(video, model_name, model_w, model_h):
+    """
+    Create a pipeline that uses neural networks to detect objects in an image
+
+    :param video: True if you want to use a video file, False if you want to use the camera
+    :param model_name: The name of the model to use
+    :param model_w: The width of the model's input image
+    :param model_h: The height of the model's input image
+    :return: The pipeline object.
+    """
     print("Creating pipeline...")
     pipeline = dai.Pipeline()
 
     # NeuralNetwork
     yoloDet = pipeline.createNeuralNetwork()
-    yoloDet.setBlobPath(
-        blobconverter.from_onnx(
-            model=MODELS.get(model_name),
-            optimizer_params=[
-                "--scale_values=[58.395, 57.12 , 57.375]",
-                "--mean_values=[123.675, 116.28 , 103.53]",
-            ],
-            shaves=shaves,
+    if Path(model_name).suffix == "blob":
+        yoloDet.setBlobPath(model_name)
+    else:
+        yoloDet.setBlobPath(
+            blobconverter.from_onnx(
+                model=MODELS.get(model_name, model_name),
+                optimizer_params=[
+                    "--scale_values=[58.395, 57.12 , 57.375]",
+                    "--mean_values=[123.675, 116.28 , 103.53]",
+                ],
+                shaves=shaves,
+            )
         )
-    )
 
     yolox_det_nn_xout = pipeline.createXLinkOut()
     yolox_det_nn_xout.setStreamName("yolox_det_nn")
@@ -57,7 +69,7 @@ def create_pipeline(video, model_name, model_size):
     if video:
         yolox_det_in = pipeline.createXLinkIn()
         yolox_det_in.setStreamName("yolox_det_in")
-        yolox_det_in.setMaxDataSize(model_size * model_size * 3)
+        yolox_det_in.setMaxDataSize(model_w * model_h * 3)
         yolox_det_in.out.link(yoloDet.input)
 
     else:
@@ -74,7 +86,8 @@ def create_pipeline(video, model_name, model_size):
         cam.preview.link(cam_xout.input)
 
         manip = pipeline.createImageManip()
-        manip.initialConfig.setResizeThumbnail(model_size, model_size, 114, 114, 114)
+        manip.setMaxOutputFrameSize(model_w * model_h * 3)
+        manip.initialConfig.setResizeThumbnail(model_w, model_h, 114, 114, 114)
         manip.initialConfig.setFrameType(dai.RawImgFrame.Type.BGR888p)
         cam.preview.link(manip.inputImage)
         manip.out.link(yoloDet.input)
@@ -98,17 +111,16 @@ def create_pipeline(video, model_name, model_size):
 @click.option(
     "-m",
     "--model_name",
-    type=click.Choice([*MODELS.keys()], case_sensitive=False),
     default="yolox",
-    help="模型名称",
+    help="模型名称, yolox、helmet 或 模型路径  ",
     show_default=True,
 )
 @click.option(
     "-size",
     "--model_size",
-    type=int,
-    default=320,
-    help="模型输入大小",
+    type=(int, int),
+    default=(320, 320),
+    help="模型输入大小 (w, h)",
     show_default=True,
 )
 @click.option(
@@ -135,11 +147,23 @@ def create_pipeline(video, model_name, model_size):
 )
 def yolox(source, model_name, model_size, video_path, output, fps, frame_size):
     """
+    This function is used to detect objects in a video
+
+    :param model_name: The name of the model to use
+    :param model_size: Size of the model
+    :param video_path: Path to the video file
+    :param output: The output file name
+    :param fps: The FPS (frames per second) of the output video
+    :param frame_size: The size of the frame to be saving
+    """
+    """
     基于 yolox 的目标检测器
     """
+    model_w = model_size[0]
+    model_h = model_size[1]
     # click.echo(click.get_current_context().params)
     device_info = getDeviceInfo()  # type: dai.DeviceInfo
-    with dai.Device(create_pipeline(source, model_name, model_size), device_info) as device:
+    with dai.Device(create_pipeline(source, model_name, model_w, model_h), device_info) as device:
         print("Starting pipeline...")
         fps_handler = FPSHandler()
         if source:
@@ -163,6 +187,9 @@ def yolox(source, model_name, model_size, video_path, output, fps, frame_size):
                 return True
 
         def get_frame():
+            """
+            Get the current frame from the camera and return it
+            """
             if source:
                 return cap.read()
             else:
@@ -181,12 +208,12 @@ def yolox(source, model_name, model_size, video_path, output, fps, frame_size):
 
             frame_debug = frame.copy()
             if source:
-                run_nn(yolox_det_in, to_planar(frame, (model_size, model_size)), model_size, model_size)
+                run_nn(yolox_det_in, to_planar(frame, (model_h, model_w)), model_w, model_h)
             yolox_det_data = yolox_det_nn.get()
 
             res = toTensorResult(yolox_det_data).get("output")
             fps_handler.tick("nn")
-            predictions = demo_postprocess(res, (model_size, model_size), p6=False)[0]
+            predictions = demo_postprocess(res, (model_h, model_w), p6=False)[0]
 
             boxes = predictions[:, :4]
             scores = predictions[:, 4, None] * predictions[:, 5:]
@@ -197,7 +224,7 @@ def yolox(source, model_name, model_size, video_path, output, fps, frame_size):
             boxes_xyxy[:, 2] = boxes[:, 0] + boxes[:, 2] / 2.0
             boxes_xyxy[:, 3] = boxes[:, 1] + boxes[:, 3] / 2.0
 
-            input_shape = np.array([model_size, model_size])
+            input_shape = np.array([model_h, model_w])
             min_r = (input_shape / frame.shape[:2]).min()
             offset = (np.array(frame.shape[:2]) * min_r - input_shape) / 2
             offset = np.ravel([offset, offset])
@@ -214,7 +241,7 @@ def yolox(source, model_name, model_size, video_path, output, fps, frame_size):
                     final_scores,
                     final_cls_inds,
                     conf=0.5,
-                    class_names=LABELS[model_name],
+                    class_names=LABELS.get(model_name),
                 )
             cv2.imshow("", frame_debug)
             if output:
