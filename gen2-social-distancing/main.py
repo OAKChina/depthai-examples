@@ -1,15 +1,15 @@
 import argparse
-from pathlib import Path
 import uuid
+from pathlib import Path
 from time import time
 
-import depthai as dai
 import cv2
+import depthai as dai
 import numpy as np
-from imutils.video import FPS
+from depthai_sdk import FPSHandler
 
-from gen2Distance import DistanceGuardianDebug
 from gen2Alerting import Bird
+from gen2Distance import DistanceGuardianDebug
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-nd', '--no-debug', action="store_true", help="Prevent debug output")
@@ -41,8 +41,7 @@ class DepthAI:
         self.frame_size = (672, 384)
         self.create_pipeline()
         self.start_pipeline()
-        self.fps = FPS()
-        self.fps.start()
+        self.fps_handler = FPSHandler()
         self.distance_guardian = self.distance_guardian_class()
         self.distance_bird = self.distance_bird_class(self.frame_size)
     
@@ -79,7 +78,7 @@ class DepthAI:
     def StereoDepthXLink(self):
         print(f"正在创建深度节点...")
         self.stereo = self.pipeline.createStereoDepth()
-        self.stereo.setConfidenceThreshold(230)
+        self.stereo.initialConfig.setConfidenceThreshold(230)
         self.stereo_out = self.pipeline.createXLinkOut()
         self.stereo_out.setStreamName("depth")
 
@@ -142,7 +141,7 @@ class DepthAI:
         if debug:
             self.debug_frame = self.frame.copy()
         self.run_model()
-        self.fps.update()
+        self.fps_handler.tick("NN")
         if debug:
             numpy_horizontal = np.hstack((self.debug_frame, self.bird_frame))
             cv2.imshow("Frame", numpy_horizontal)
@@ -162,8 +161,7 @@ class DepthAI:
     
     def run(self):
         self.run_camera()
-        self.fps.stop()
-        print("FPS:{:.2f}".format(self.fps.fps()))
+        self.fps_handler.printStatus()
     
     def __del__(self):
         del self.pipeline

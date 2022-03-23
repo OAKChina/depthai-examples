@@ -9,6 +9,18 @@ __all__ = ["vis"]
 
 
 def vis(img, boxes, scores, cls_ids, conf=0.5, class_names=None):
+    """
+    Given an image, a list of bounding boxes, a list of class IDs, and a list of scores,
+    this function draws a rectangle around each bounding box and adds the class name and the score to the image
+
+    :param img: The input image
+    :param boxes: a numpy array of shape [N, 4], where N is the number of boxes
+    :param scores: A numpy array of shape (N,), representing the confidence scores of the detected N object instances
+    :param cls_ids: The class ids predicted by the model
+    :param conf: confidence threshold
+    :param class_names: A list of strings, each containing the name of a class
+    :return: the image with the bounding boxes drawn on it.
+    """
 
     for i in range(len(boxes)):
         box = boxes[i]

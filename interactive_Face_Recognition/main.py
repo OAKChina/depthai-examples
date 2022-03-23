@@ -1,15 +1,16 @@
 import argparse
+import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
 import cv2
-import numpy as np
 import depthai
-from scipy.optimize import linear_sum_assignment
+import numpy as np
 from scipy.spatial.distance import cosine
-import os
-from utils import Utils
+
 import photo
-import time
+from utils import Utils
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-nd', '--no-debug', action="store_true", help="Prevent debug output")
@@ -120,9 +121,9 @@ class Main:
             cam_xout.setStreamName("cam_out")
             cam.preview.link(cam_xout.input)
         
-        self.models("models/face-detection-retail-0004.blob","face")
-        self.models("models/landmarks-regression-retail-0009.blob","land")
-        self.models("models/face-reidentification-retail-0095.blob",'reid')
+        self.models("models/face-detection-retail-0004_openvino_2021.4_6shave.blob","face")
+        self.models("models/landmarks-regression-retail-0009_openvino_2021.4_6shave.blob","land")
+        self.models("models/face-reidentification-retail-0095_openvino_2021.4_6shave.blob",'reid')
 
     def models(self,model_path,name):
         print(f"开始创建{model_path}神经网络")

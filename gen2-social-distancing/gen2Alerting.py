@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import cv2
 import numpy as np
 
+
 class Close:
     confidence_threshold = 0.5
 

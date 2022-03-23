@@ -1,6 +1,4 @@
-# -i https://pypi.tuna.tsinghua.edu.cn/simple/
-opencv-python>=4.4.0.46
-numpy>=1.19.4
-imutils>=0.5.3
-depthai>=2.10.0.0
-blobconverter>=1.2.2
+-i https://pypi.tuna.tsinghua.edu.cn/simple/
+depthai-sdk>=1.1.6
+depthai>=2.13.0.0
+Click

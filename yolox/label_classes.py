@@ -84,3 +84,5 @@ COCO_CLASSES = (
     "hair drier",
     "toothbrush",
 )
+
+HELMET_CLASSES = ("helmet", "head")

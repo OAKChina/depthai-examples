@@ -5,8 +5,7 @@ from pathlib import Path
 
 import blobconverter
 import depthai
-from imutils.video import FPS
-from scipy.spatial.distance import euclidean
+from depthai_sdk import FPSHandler
 
 from tools import *
 
@@ -195,8 +194,7 @@ class Main:
         self.TOTAL = 0
         self.mTOTAL = 0
         self.hTOTAL = 0
-        self.fps = FPS()
-        self.fps.start()
+        self.fps_handler = FPSHandler()
 
     def start_pipeline(self):
         self.device = depthai.Device(self.pipeline)
@@ -395,9 +393,9 @@ class Main:
         return mar
 
     def eye_aspect_ratio(self, eye):
-        A = euclidean(eye[1], eye[5])
-        B = euclidean(eye[2], eye[4])
-        C = euclidean(eye[0], eye[3])
+        A = np.linalg.norm(eye[1], eye[5])
+        B = np.linalg.norm(eye[2], eye[4])
+        C = np.linalg.norm(eye[0], eye[3])
         return (A + B) / (2.0 * C)
 
     def parse(self):
@@ -408,7 +406,7 @@ class Main:
         if face_success:
             for i in range(len(self.face_frame)):
                 self.run_land68(self.face_frame[i], i)
-            self.fps.update()
+            self.fps_handler.tick("NN")
         if debug:
             aspect_ratio = self.frame.shape[1] / self.frame.shape[0]
             cv2.imshow(
@@ -435,6 +433,7 @@ class Main:
     def run_camera(self):
         while True:
             rgb_in = self.cam_out.get()
+            self.fps_handler.tick("Frame")
             self.frame = (
                 np.array(rgb_in.getData())
                 .reshape((3, rgb_in.getHeight(), rgb_in.getWidth()))
@@ -451,8 +450,7 @@ class Main:
             self.run_video()
         else:
             self.run_camera()
-        self.fps.stop()
-        print("FPS:{:.2f}".format(self.fps.fps()))
+        self.fps_handler.printStatus()
         del self.device
 
 

@@ -1,0 +1,6 @@
+-i https://pypi.tuna.tsinghua.edu.cn/simple/
+depthai-sdk>=1.1.6
+depthai>=2.13.0.0
+click
+pynput
+python-xlib

@@ -2,6 +2,7 @@
 from queue import Queue
 
 import blobconverter
+from depthai_sdk import frameNorm, toPlanar
 
 from depthai_utils import *
 
@@ -24,6 +25,7 @@ class Main(DepthAI):
             first=True,
         )
         # https://github.com/sbdcv/sbd_mask/tree/master/model
+        # https://github.com/sbdcv/sbd_mask/blob/8e25fbd550339857f6466016d3ed0866e759ab47/deploy.py#L11-L12
         self.create_nn(
             blobconverter.from_onnx(
                 (Path(__file__).parent / Path("models/sbd_mask.onnx")).as_posix(),
@@ -50,7 +52,7 @@ class Main(DepthAI):
             nn_data = run_nn(
                 self.face_in,
                 self.face_nn,
-                {"data": to_planar(self.frame, (300, 300))},
+                {"data": toPlanar(self.frame, (300, 300))},
             )
         else:
             nn_data = self.face_nn.tryGet()
@@ -60,8 +62,8 @@ class Main(DepthAI):
         bboxes = nn_data.detections
         self.number_of_people = len(bboxes)
         for bbox in bboxes:
-            face_coord = frame_norm(
-                (300, 300), *[bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
+            face_coord = frameNorm(
+                self.debug_frame, [bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax]
             )
             # face_coord = restore_point(face_coord, scale, top, left).astype(int)
             face_coord = scale_bbox(face_coord)
@@ -81,11 +83,11 @@ class Main(DepthAI):
             nn_data = run_nn(
                 self.mask_in,
                 self.mask_nn,
-                {"data": to_planar(face_frame, (224, 224))},
+                {"data": toPlanar(face_frame, (224, 224))},
             )
             if nn_data is None:
                 return
-            self.fps_nn.update()
+            self.fps_handler.tick("NN")
             out = softmax(to_nn_result(nn_data))
             mask = np.argmax(out) > 0.5
 

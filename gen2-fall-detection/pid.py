@@ -1,6 +1,7 @@
-from time import time
 from math import pi, isnan
- 
+from time import time
+
+
 class PID:
     _kp = _ki = _kd = _integrator = _imax = 0
     _last_error = _last_derivative = 0

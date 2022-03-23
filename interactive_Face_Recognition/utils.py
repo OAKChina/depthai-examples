@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from numpy import clip
+
 
 class Utils:
     def __init__(self):

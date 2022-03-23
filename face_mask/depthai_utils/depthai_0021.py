@@ -1,8 +1,7 @@
 # coding=utf-8
 from pathlib import Path
 
-from imutils.video import FPS
-
+from depthai_sdk import FPSHandler
 from .utils import *
 
 
@@ -16,9 +15,7 @@ class DepthAI:
         self.HD = args.hd
         self.file = file
         self.camera = camera
-        # self.cam_size()
-        self.fps_cam = FPS()
-        self.fps_nn = FPS()
+        self.fps_handler = FPSHandler()
         self.create_pipeline()
         self.start_pipeline()
         self.fontScale = 1 if self.camera else 2
@@ -83,10 +80,6 @@ class DepthAI:
         model_nn_xout = self.pipeline.createXLinkOut()
         model_nn_xout.setStreamName(f"{model_name}_nn")
         model_nn.out.link(model_nn_xout.input)
-
-        # model_nn_passthrough = self.pipeline.createXLinkOut()
-        # model_nn_passthrough.setStreamName("model_passthrough")
-        # model_nn_passthrough.setMetadataOnly(True)
 
     def create_mobilenet_nn(
         self,
@@ -191,20 +184,14 @@ class DepthAI:
         self.parse_fun()
 
         if debug:
-            aspect_ratio = self.frame.shape[1] / self.frame.shape[0]
             cv2.imshow(
                 "Camera_view",
                 self.debug_frame,
-                # cv2.resize(
-                #     self.debug_frame, (int(900), int(900 / aspect_ratio))
-                # ),
             )
-            self.fps_cam.update()
+            self.fps_handler.tick("Frame")
             if cv2.waitKey(1) == ord("q"):
                 cv2.destroyAllWindows()
-                self.fps_cam.stop()
-                self.fps_nn.stop()
-                print(f"FPS_CAMERA: {self.fps_cam.fps():.2f} , FPS_NN: {self.fps_nn.fps():.2f}")
+                self.fps_handler.printStatus()
                 raise StopIteration()
 
     def parse_fun(self):
@@ -229,15 +216,7 @@ class DepthAI:
             while True:
                 in_video = self.video.tryGet()
                 if in_video is not None:
-                    packet_data = in_video.getData()
-                    w = in_video.getWidth()
-                    h = in_video.getHeight()
-                    yuv420p = packet_data.reshape((-1, w))
-                    self.frame = cv2.cvtColor(yuv420p, cv2.COLOR_YUV2BGR_NV12)
-
-                    # Get BGR frame from NV12 encoded video frame
-                    # self.frame = in_video.getBgrFrame()
-                    # cv2.imshow('', in_video.getBgrFrame())
+                    self.frame = in_video.getCvFrame()
 
                     try:
                         self.parse()
@@ -247,18 +226,9 @@ class DepthAI:
             while True:
                 in_rgb = self.preview.tryGet()
                 if in_rgb is not None:
-                    shape = (3, in_rgb.getHeight(), in_rgb.getWidth())
-
-                    self.frame = (
-                        in_rgb.getData()
-                        .reshape(shape)
-                        .transpose(1, 2, 0)
-                        .astype(np.uint8)
-                    )
-                    self.frame = np.ascontiguousarray(self.frame)
-                    # self.frame = in_rgb.getFrame()
-                    # cv2.imshow('', in_rgb.getFrame())
+                    self.frame = in_rgb.getCvFrame()
                     try:
+
                         self.parse()
                     except StopIteration:
                         break
@@ -274,8 +244,6 @@ class DepthAI:
         self._cam_size = v
 
     def run(self):
-        self.fps_cam.start()
-        self.fps_nn.start()
         if self.file is not None:
             self.run_video()
         else:
